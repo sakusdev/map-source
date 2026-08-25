@@ -5,6 +5,7 @@ on:
   push:
     branches: [ main ]
     paths:
+      - 'Tools/build_dataset.py'
       - 'Tools/build_seed_tile.py'
       - 'Tools/requirements.txt'
       - '.github/workflows/generate-seed.yml'
@@ -33,6 +34,8 @@ jobs:
         run: pip install -r Tools/requirements.txt
 
       - name: Generate Fuji seed tile
+        env:
+          GSI_REQUEST_DELAY: '0.05'
         run: python Tools/build_seed_tile.py
 
       - name: Verify generated payloads
@@ -56,5 +59,6 @@ jobs:
             echo 'Seed data unchanged.'
             exit 0
           fi
-          git commit -m 'data: generate Fuji seed tile 07_06'
-          git push
+          git commit -m 'data: generate Fuji seed tile 07_06 (v2)'
+          git pull --rebase origin main
+          git push origin HEAD:main
