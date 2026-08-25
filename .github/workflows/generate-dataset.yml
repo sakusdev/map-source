@@ -1,0 +1,110 @@
+name: Generate Fuji terrain dataset
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Generation mode'
+        required: true
+        default: 'seed'
+        type: choice
+        options:
+          - seed
+          - all
+      tile_x:
+        description: 'Tile X for seed mode'
+        required: false
+        default: '7'
+      tile_y:
+        description: 'Tile Y for seed mode'
+        required: false
+        default: '6'
+      overwrite:
+        description: 'Regenerate files that already exist'
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: map-source-dataset
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: Tools/requirements.txt
+
+      - name: Install generator dependencies
+        run: pip install -r Tools/requirements.txt
+
+      - name: Generate requested dataset
+        shell: bash
+        env:
+          GSI_REQUEST_DELAY: '0.05'
+        run: |
+          set -Eeuo pipefail
+          args=()
+          if [[ '${{ inputs.mode }}' == 'all' ]]; then
+            args+=(--all)
+          else
+            args+=(--tile '${{ inputs.tile_x }}' '${{ inputs.tile_y }}')
+          fi
+          if [[ '${{ inputs.overwrite }}' == 'true' ]]; then
+            args+=(--overwrite)
+          fi
+          python Tools/build_dataset.py "${args[@]}"
+
+      - name: Verify payload set
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ '${{ inputs.mode }}' == 'all' ]]; then
+            pc=$(find Server/data/pc -maxdepth 1 -name '*.jpg' | wc -l)
+            quest=$(find Server/data/quest -maxdepth 1 -name '*.jpg' | wc -l)
+            dem=$(find Server/data/dem -maxdepth 1 -name '*.gst2' | wc -l)
+            echo "pc=$pc quest=$quest dem=$dem"
+            test "$pc" -eq 210
+            test "$quest" -eq 210
+            test "$dem" -eq 210
+          else
+            stem=$(printf '%02d_%02d' '${{ inputs.tile_x }}' '${{ inputs.tile_y }}')
+            test -s "Server/data/pc/$stem.jpg"
+            test -s "Server/data/quest/$stem.jpg"
+            test -s "Server/data/dem/$stem.gst2"
+            file "Server/data/pc/$stem.jpg" "Server/data/quest/$stem.jpg" "Server/data/dem/$stem.gst2"
+          fi
+
+      - name: Dataset size summary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          du -sh Server/data
+          du -sh Server/data/pc Server/data/quest Server/data/dem
+
+      - name: Commit generated data
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Server/data/pc Server/data/quest Server/data/dem
+          if git diff --cached --quiet; then
+            echo 'Dataset unchanged.'
+            exit 0
+          fi
+          git commit -m "data: generate Fuji terrain dataset (${{ inputs.mode }})"
+          git pull --rebase origin main
+          git push origin HEAD:main
