@@ -1,4 +1,5 @@
 GSI Streaming Terrain v2 full dataset request
-requested: 2026-08-25
+requested: 2026-08-26
 mode: all
 checkpoint: row
+reason: retry after seamlessphoto 404 fallback fix
