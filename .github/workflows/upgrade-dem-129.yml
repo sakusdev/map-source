@@ -1,0 +1,106 @@
+name: Upgrade terrain DEM to 129 grid
+
+on:
+  workflow_run:
+    workflows:
+      - 'Generate Fuji terrain dataset'
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: map-source-dem-129
+  cancel-in-progress: false
+
+jobs:
+  upgrade:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      GSI_REQUEST_DELAY: '0.05'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: Tools/requirements.txt
+
+      - name: Install generator dependencies
+        run: pip install -r Tools/requirements.txt
+
+      - name: Configure git
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Upgrade DEM rows to 129x129
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for y in $(seq 0 13); do
+            ys=$(printf '%02d' "$y")
+            echo "===== DEM129 ROW $ys / 13 ====="
+            for x in $(seq 0 14); do
+              stem=$(printf '%02d_%02d' "$x" "$y")
+              file="Server/data/dem/$stem.gst2"
+              grid=$(python - "$file" <<'PY'
+          import pathlib, struct, sys
+          p = pathlib.Path(sys.argv[1])
+          if not p.is_file():
+              print(0)
+          else:
+              b = p.read_bytes()
+              print(struct.unpack_from('<H', b, 6)[0] if len(b) >= 8 and b[:4] == b'GST2' else 0)
+          PY
+              )
+              if [[ "$grid" != "129" ]]; then
+                python Tools/build_dataset_safe.py --tile "$x" "$y" --dem-only --overwrite
+              else
+                echo "skip $stem grid=129"
+              fi
+            done
+
+            python - "$ys" <<'PY'
+          import pathlib, struct, sys
+          ys = sys.argv[1]
+          files = sorted(pathlib.Path('Server/data/dem').glob(f'??_{ys}.gst2'))
+          assert len(files) == 15, (ys, len(files))
+          for p in files:
+              b = p.read_bytes()
+              assert b[:4] == b'GST2' and b[4] == 2, p
+              grid = struct.unpack_from('<H', b, 6)[0]
+              assert grid == 129, (p, grid)
+              assert len(b) == 16 + 129 * 129 * 2, (p, len(b))
+          print('DEM129 row OK', ys)
+          PY
+
+            git add Server/data/dem/??_${ys}.gst2
+            if ! git diff --cached --quiet; then
+              git commit -m "data: upgrade Fuji DEM row $ys to 129 grid"
+              git pull --rebase origin main
+              git push origin HEAD:main
+            fi
+          done
+
+      - name: Verify all DEM payloads
+        run: |
+          python - <<'PY'
+          import pathlib, struct
+          files = sorted(pathlib.Path('Server/data/dem').glob('*.gst2'))
+          assert len(files) == 210, len(files)
+          for p in files:
+              b = p.read_bytes()
+              assert b[:4] == b'GST2' and b[4] == 2, p
+              assert struct.unpack_from('<H', b, 6)[0] == 129, p
+              assert len(b) == 16 + 129 * 129 * 2, p
+          print('all DEM129 payloads valid:', len(files))
+          PY
+          du -sh Server/data/dem
