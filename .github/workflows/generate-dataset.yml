@@ -22,8 +22,12 @@ on:
       overwrite:
         description: 'Regenerate files that already exist'
         required: true
-        default: true
+        default: false
         type: boolean
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/dataset-request-full'
 
 permissions:
   contents: write
@@ -36,6 +40,8 @@ jobs:
   generate:
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    env:
+      GSI_REQUEST_DELAY: '0.05'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -50,42 +56,108 @@ jobs:
       - name: Install generator dependencies
         run: pip install -r Tools/requirements.txt
 
-      - name: Generate requested dataset
+      - name: Configure git
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Generate dataset with row checkpoints
         shell: bash
         env:
-          GSI_REQUEST_DELAY: '0.05'
+          MODE: ${{ github.event_name == 'push' && 'all' || inputs.mode }}
+          OVERWRITE: ${{ github.event_name == 'push' && 'false' || inputs.overwrite }}
+          TILE_X: ${{ inputs.tile_x || '7' }}
+          TILE_Y: ${{ inputs.tile_y || '6' }}
         run: |
           set -Eeuo pipefail
-          args=()
-          if [[ '${{ inputs.mode }}' == 'all' ]]; then
-            args+=(--all)
-          else
-            args+=(--tile '${{ inputs.tile_x }}' '${{ inputs.tile_y }}')
-          fi
-          if [[ '${{ inputs.overwrite }}' == 'true' ]]; then
-            args+=(--overwrite)
-          fi
-          python Tools/build_dataset.py "${args[@]}"
 
-      - name: Verify payload set
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          if [[ '${{ inputs.mode }}' == 'all' ]]; then
-            pc=$(find Server/data/pc -maxdepth 1 -name '*.jpg' | wc -l)
-            quest=$(find Server/data/quest -maxdepth 1 -name '*.jpg' | wc -l)
-            dem=$(find Server/data/dem -maxdepth 1 -name '*.gst2' | wc -l)
-            echo "pc=$pc quest=$quest dem=$dem"
-            test "$pc" -eq 210
-            test "$quest" -eq 210
-            test "$dem" -eq 210
-          else
-            stem=$(printf '%02d_%02d' '${{ inputs.tile_x }}' '${{ inputs.tile_y }}')
+          verify_gst2() {
+            python - "$@" <<'PY'
+          import pathlib, struct, sys
+          for raw in sys.argv[1:]:
+              p = pathlib.Path(raw)
+              b = p.read_bytes()
+              if len(b) < 16 or b[:4] != b'GST2' or b[4] != 2:
+                  raise SystemExit(f'invalid GST2 header: {p}')
+              grid = struct.unpack_from('<H', b, 6)[0]
+              expected = 16 + grid * grid * 2
+              if grid < 2 or len(b) != expected:
+                  raise SystemExit(f'invalid GST2 size: {p}: grid={grid} bytes={len(b)} expected={expected}')
+              print(f'GST2 OK {p} grid={grid} bytes={len(b)}')
+          PY
+          }
+
+          extra=()
+          if [[ "$OVERWRITE" == 'true' ]]; then
+            extra+=(--overwrite)
+          fi
+
+          if [[ "$MODE" != 'all' ]]; then
+            python Tools/build_dataset.py --tile "$TILE_X" "$TILE_Y" "${extra[@]}"
+            stem=$(printf '%02d_%02d' "$TILE_X" "$TILE_Y")
             test -s "Server/data/pc/$stem.jpg"
             test -s "Server/data/quest/$stem.jpg"
             test -s "Server/data/dem/$stem.gst2"
-            file "Server/data/pc/$stem.jpg" "Server/data/quest/$stem.jpg" "Server/data/dem/$stem.gst2"
+            verify_gst2 "Server/data/dem/$stem.gst2"
+            git add "Server/data/pc/$stem.jpg" "Server/data/quest/$stem.jpg" "Server/data/dem/$stem.gst2"
+            if ! git diff --cached --quiet; then
+              git commit -m "data: generate Fuji terrain tile $stem"
+              git pull --rebase origin main
+              git push origin HEAD:main
+            fi
+            exit 0
           fi
+
+          for y in $(seq 0 13); do
+            ys=$(printf '%02d' "$y")
+            echo "===== DATASET ROW $ys / 13 ====="
+            for x in $(seq 0 14); do
+              python Tools/build_dataset.py --tile "$x" "$y" "${extra[@]}"
+            done
+
+            pc=$(find Server/data/pc -maxdepth 1 -name "??_${ys}.jpg" | wc -l)
+            quest=$(find Server/data/quest -maxdepth 1 -name "??_${ys}.jpg" | wc -l)
+            dem=$(find Server/data/dem -maxdepth 1 -name "??_${ys}.gst2" | wc -l)
+            echo "row=$ys pc=$pc quest=$quest dem=$dem"
+            test "$pc" -eq 15
+            test "$quest" -eq 15
+            test "$dem" -eq 15
+            verify_gst2 Server/data/dem/??_${ys}.gst2
+
+            git add Server/data/pc/??_${ys}.jpg Server/data/quest/??_${ys}.jpg Server/data/dem/??_${ys}.gst2
+            if ! git diff --cached --quiet; then
+              git commit -m "data: generate Fuji terrain row $ys"
+              git pull --rebase origin main
+              git push origin HEAD:main
+            else
+              echo "row $ys unchanged"
+            fi
+          done
+
+      - name: Verify complete dataset
+        if: ${{ github.event_name == 'push' || inputs.mode == 'all' }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          pc=$(find Server/data/pc -maxdepth 1 -name '*.jpg' | wc -l)
+          quest=$(find Server/data/quest -maxdepth 1 -name '*.jpg' | wc -l)
+          dem=$(find Server/data/dem -maxdepth 1 -name '*.gst2' | wc -l)
+          echo "pc=$pc quest=$quest dem=$dem"
+          test "$pc" -eq 210
+          test "$quest" -eq 210
+          test "$dem" -eq 210
+          python - <<'PY'
+          import pathlib, struct
+          files = sorted(pathlib.Path('Server/data/dem').glob('*.gst2'))
+          assert len(files) == 210, len(files)
+          for p in files:
+              b = p.read_bytes()
+              assert b[:4] == b'GST2' and b[4] == 2, p
+              grid = struct.unpack_from('<H', b, 6)[0]
+              assert len(b) == 16 + grid * grid * 2, (p, grid, len(b))
+          print('all GST2 payloads valid:', len(files))
+          PY
 
       - name: Dataset size summary
         shell: bash
@@ -93,18 +165,3 @@ jobs:
           set -Eeuo pipefail
           du -sh Server/data
           du -sh Server/data/pc Server/data/quest Server/data/dem
-
-      - name: Commit generated data
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add Server/data/pc Server/data/quest Server/data/dem
-          if git diff --cached --quiet; then
-            echo 'Dataset unchanged.'
-            exit 0
-          fi
-          git commit -m "data: generate Fuji terrain dataset (${{ inputs.mode }})"
-          git pull --rebase origin main
-          git push origin HEAD:main
