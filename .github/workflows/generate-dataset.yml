@@ -94,7 +94,7 @@ jobs:
           fi
 
           if [[ "$MODE" != 'all' ]]; then
-            python Tools/build_dataset.py --tile "$TILE_X" "$TILE_Y" "${extra[@]}"
+            python Tools/build_dataset_safe.py --tile "$TILE_X" "$TILE_Y" "${extra[@]}"
             stem=$(printf '%02d_%02d' "$TILE_X" "$TILE_Y")
             test -s "Server/data/pc/$stem.jpg"
             test -s "Server/data/quest/$stem.jpg"
@@ -113,7 +113,7 @@ jobs:
             ys=$(printf '%02d' "$y")
             echo "===== DATASET ROW $ys / 13 ====="
             for x in $(seq 0 14); do
-              python Tools/build_dataset.py --tile "$x" "$y" "${extra[@]}"
+              python Tools/build_dataset_safe.py --tile "$x" "$y" "${extra[@]}"
             done
 
             pc=$(find Server/data/pc -maxdepth 1 -name "??_${ys}.jpg" | wc -l)
