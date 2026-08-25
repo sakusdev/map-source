@@ -23,7 +23,7 @@ WORLD_ORIGIN_X_M = -30000.0
 WORLD_ORIGIN_Z_M = -27500.0
 PC_SIZE = 2048
 QUEST_SIZE = 1024
-DEM_GRID = 65
+DEM_GRID = 129
 IMG_Z = 16
 DEM_Z = 14
 PC_JPEG_QUALITY = 88
@@ -36,7 +36,6 @@ OUT_PC = ROOT / "Server/data/pc"
 OUT_QUEST = ROOT / "Server/data/quest"
 OUT_DEM = ROOT / "Server/data/dem"
 
-# Current GSI recommended precision order. All are available as PNG at z14.
 DEM_DATASETS = (
     "dem1a_png",
     "dem5a_png",
@@ -144,12 +143,7 @@ def build_imagery(x: int, y: int, overwrite: bool = False) -> None:
             tile = fetch_imagery_tile(tx, ty)
             mosaic.paste(tile, ((tx - tx0) * 256, (ty - ty0) * 256))
 
-    box = (
-        left - tx0 * 256,
-        top - ty0 * 256,
-        right - tx0 * 256,
-        bottom - ty0 * 256,
-    )
+    box = (left - tx0 * 256, top - ty0 * 256, right - tx0 * 256, bottom - ty0 * 256)
     pc = mosaic.crop(box).resize((PC_SIZE, PC_SIZE), Image.Resampling.LANCZOS)
     quest = pc.resize((QUEST_SIZE, QUEST_SIZE), Image.Resampling.LANCZOS)
 
@@ -202,7 +196,6 @@ def fetch_dem_source_tile(dataset: str, tx: int, ty: int) -> list[list[float | N
 def fetch_best_dem_tile(tx: int, ty: int) -> list[list[float | None]]:
     combined: list[list[float | None]] = [[None] * 256 for _ in range(256)]
     missing = 256 * 256
-
     for dataset in DEM_DATASETS:
         source = fetch_dem_source_tile(dataset, tx, ty)
         if source is None:
@@ -219,7 +212,6 @@ def fetch_best_dem_tile(tx: int, ty: int) -> list[list[float | None]]:
         print("dem", tx, ty, dataset, "filled", filled, "remaining", missing)
         if missing <= 0:
             break
-
     return combined
 
 
@@ -279,7 +271,6 @@ def build_dem(x: int, y: int, overwrite: bool = False) -> None:
     local_right = right - tx0 * 256
     local_bottom = bottom - ty0 * 256
 
-    # Mesh vertex order is south -> north in Unity (+Z), while raster Y is north -> south.
     heights: list[float] = []
     for gy in range(DEM_GRID):
         north_fraction = gy / (DEM_GRID - 1)
@@ -336,14 +327,7 @@ def main() -> None:
         validate_tile(x, y)
         tiles = [(x, y)]
 
-    print(
-        "dataset",
-        f"center={CENTER_LAT},{CENTER_LON}",
-        f"grid={GRID_X}x{GRID_Y}",
-        f"tile={TILE_SIZE_M}m",
-        f"origin=({WORLD_ORIGIN_X_M},{WORLD_ORIGIN_Z_M})",
-        f"count={len(tiles)}",
-    )
+    print("dataset", f"center={CENTER_LAT},{CENTER_LON}", f"grid={GRID_X}x{GRID_Y}", f"tile={TILE_SIZE_M}m", f"origin=({WORLD_ORIGIN_X_M},{WORLD_ORIGIN_Z_M})", f"demGrid={DEM_GRID}", f"count={len(tiles)}")
 
     for index, (x, y) in enumerate(tiles, start=1):
         print(f"=== [{index}/{len(tiles)}] {x:02d}_{y:02d} ===")
