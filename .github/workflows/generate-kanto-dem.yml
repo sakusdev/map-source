@@ -33,7 +33,7 @@ on:
 
 concurrency:
   group: map-source-kanto-dem
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   plan:
@@ -80,7 +80,9 @@ jobs:
     permissions:
       contents: write
     env:
-      GSI_REQUEST_DELAY: '0.04'
+      GSI_REQUEST_DELAY: '0.08'
+      GSI_HTTP_TIMEOUT: '12'
+      GSI_HTTP_ATTEMPTS: '2'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -133,13 +135,15 @@ jobs:
     needs: plan
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 6
       matrix:
         shard: [0, 1, 2, 3, 4, 5, 6, 7, 8]
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 240
     env:
-      GSI_REQUEST_DELAY: '0.05'
+      GSI_REQUEST_DELAY: '0.08'
+      GSI_HTTP_TIMEOUT: '12'
+      GSI_HTTP_ATTEMPTS: '2'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -207,8 +211,6 @@ jobs:
           set -Eeuo pipefail
           mkdir -p Server/data/regions/kanto/dem
           cp _kanto_generated/*.gst2 Server/data/regions/kanto/dem/
-          # Also writes/refreshes the canonical region manifest. The tile is
-          # already present after artifact merge, so no network request occurs.
           python Tools/build_dem_region.py --region kanto --tile 30 31
           count=$(find Server/data/regions/kanto/dem -maxdepth 1 -name '*.gst2' | wc -l)
           echo "Kanto GST2 tiles=$count expected=3780"
