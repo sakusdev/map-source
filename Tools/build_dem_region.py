@@ -5,6 +5,10 @@ import argparse
 import functools
 import json
 import math
+import os
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import build_dataset as base
@@ -26,6 +30,38 @@ REGIONS = {
 }
 
 
+def regional_fetch_cached(url: str, path: Path, timeout: int = 45) -> bytes:
+    """Bound regional generation stalls without changing the legacy Fuji builder."""
+    if path.is_file() and path.stat().st_size > 0:
+        return path.read_bytes()
+
+    timeout = float(os.environ.get("GSI_HTTP_TIMEOUT", "12"))
+    attempts = max(1, int(os.environ.get("GSI_HTTP_ATTEMPTS", "2")))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    req = urllib.request.Request(url, headers={"User-Agent": base.USER_AGENT})
+    last_error: Exception | None = None
+
+    for attempt in range(attempts):
+        try:
+            if base.REQUEST_DELAY_SECONDS > 0:
+                time.sleep(base.REQUEST_DELAY_SECONDS)
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                data = response.read()
+            if not data:
+                raise IOError("empty response")
+            path.write_bytes(data)
+            return data
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as exc:
+            last_error = exc
+            if isinstance(exc, urllib.error.HTTPError) and exc.code == 404:
+                raise
+            if attempt + 1 < attempts:
+                time.sleep(1.0 * (2 ** attempt))
+
+    assert last_error is not None
+    raise last_error
+
+
 def global_px_to_lonlat(px: float, py: float, z: int) -> tuple[float, float]:
     n = 256.0 * (1 << z)
     lon = px / n * 360.0 - 180.0
@@ -45,6 +81,10 @@ def apply_region(region_id: str) -> dict:
     base.DEM_GRID = int(cfg["dem_grid"])
     base.DEM_Z = int(cfg["dem_z"])
     base.OUT_DEM = ROOT / "Server/data/regions" / region_id / "dem"
+
+    # Kanto generation may touch thousands of source tiles. Keep transient
+    # GSI stalls bounded and fall through to the next DEM source quickly.
+    base.fetch_cached = regional_fetch_cached
 
     # Adjacent 4 km supertiles reuse most Z14 DEM source tiles. Keep only a
     # local decoded neighborhood so a multi-row shard stays fast without
