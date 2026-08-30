@@ -1,0 +1,140 @@
+name: Generate Overture building tiles
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Generation mode'
+        required: true
+        default: 'seed'
+        type: choice
+        options:
+          - seed
+          - all
+      tile_x:
+        description: 'Tile X for seed mode'
+        required: false
+        default: '7'
+      tile_y:
+        description: 'Tile Y for seed mode'
+        required: false
+        default: '7'
+      overwrite:
+        description: 'Regenerate files that already exist'
+        required: true
+        default: true
+        type: boolean
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/buildings-request-seed'
+      - '.github/buildings-request-full'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: map-source-buildings
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: Tools/requirements-buildings.txt
+
+      - name: Install Overture client
+        run: pip install -r Tools/requirements-buildings.txt
+
+      - name: Configure git
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Generate building tiles
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_FILE: ${{ github.event.head_commit.message }}
+          INPUT_MODE: ${{ inputs.mode || 'seed' }}
+          TILE_X: ${{ inputs.tile_x || '7' }}
+          TILE_Y: ${{ inputs.tile_y || '7' }}
+          OVERWRITE: ${{ github.event_name == 'push' && 'true' || inputs.overwrite }}
+        run: |
+          set -Eeuo pipefail
+          mode="$INPUT_MODE"
+          if [[ "$EVENT_NAME" == 'push' ]]; then
+            if git diff-tree --no-commit-id --name-only -r HEAD | grep -qx '.github/buildings-request-full'; then
+              mode='all'
+            else
+              mode='seed'
+            fi
+          fi
+
+          extra=()
+          if [[ "$OVERWRITE" == 'true' ]]; then
+            extra+=(--overwrite)
+          fi
+
+          if [[ "$mode" == 'all' ]]; then
+            python Tools/build_buildings.py --all "${extra[@]}"
+          else
+            python Tools/build_buildings.py --tile "$TILE_X" "$TILE_Y" "${extra[@]}"
+          fi
+
+      - name: Verify GSB1 outputs
+        shell: bash
+        env:
+          INPUT_MODE: ${{ inputs.mode || 'seed' }}
+          TILE_X: ${{ inputs.tile_x || '7' }}
+          TILE_Y: ${{ inputs.tile_y || '7' }}
+        run: |
+          set -Eeuo pipefail
+          python - <<'PY'
+          import pathlib, struct
+          roots = [pathlib.Path('Server/data/buildings/pc'), pathlib.Path('Server/data/buildings/quest')]
+          files = []
+          for root in roots:
+              if root.exists():
+                  files.extend(root.glob('*.gsb1'))
+          if not files:
+              raise SystemExit('no GSB1 outputs generated')
+          for p in sorted(files):
+              b = p.read_bytes()
+              if len(b) < 12 or b[:4] != b'GSB1' or b[4] != 1:
+                  raise SystemExit(f'invalid GSB1 header: {p}')
+              count = struct.unpack_from('<H', b, 6)[0]
+              expected = 12 + count * 12
+              if len(b) != expected:
+                  raise SystemExit(f'invalid GSB1 size: {p}: count={count} bytes={len(b)} expected={expected}')
+          print('GSB1 OK files=', len(files))
+          PY
+
+      - name: Commit generated building data
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git add Server/data/buildings DATA_ATTRIBUTION.md
+          if git diff --cached --quiet; then
+            echo 'building data unchanged'
+            exit 0
+          fi
+          git commit -m 'data: generate Overture building tiles'
+          git pull --rebase origin main
+          git push origin HEAD:main
+
+      - name: Size summary
+        shell: bash
+        run: |
+          du -sh Server/data/buildings || true
+          find Server/data/buildings -type f -name '*.gsb1' | wc -l
