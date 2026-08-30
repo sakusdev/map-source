@@ -10,6 +10,7 @@ on:
     workflows:
       - 'Generate Fuji seed tile'
       - 'Generate Fuji terrain dataset'
+      - 'Generate Overture building tiles'
     types: [completed]
   workflow_dispatch:
 
