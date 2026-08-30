@@ -46,11 +46,11 @@ def apply_region(region_id: str) -> dict:
     base.DEM_Z = int(cfg["dem_z"])
     base.OUT_DEM = ROOT / "Server/data/regions" / region_id / "dem"
 
-    # Adjacent 4 km supertiles reuse most Z14 DEM source tiles. A small LRU
-    # keeps the hot neighborhood decoded without allowing memory to grow with
-    # the whole Kanto region.
+    # Adjacent 4 km supertiles reuse most Z14 DEM source tiles. Keep only a
+    # local decoded neighborhood so a multi-row shard stays fast without
+    # retaining the whole Kanto source mosaic in RAM.
     uncached = base.fetch_best_dem_tile
-    base.fetch_best_dem_tile = functools.lru_cache(maxsize=40)(uncached)
+    base.fetch_best_dem_tile = functools.lru_cache(maxsize=48)(uncached)
     return cfg
 
 
@@ -105,6 +105,7 @@ def parse_args() -> argparse.Namespace:
     select = p.add_mutually_exclusive_group(required=True)
     select.add_argument("--all", action="store_true")
     select.add_argument("--row", type=int)
+    select.add_argument("--rows", nargs=2, type=int, metavar=("START", "END"))
     select.add_argument("--tile", nargs=2, type=int, metavar=("X", "Y"))
     p.add_argument("--overwrite", action="store_true")
     return p.parse_args()
@@ -112,11 +113,17 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    cfg = apply_region(args.region)
+    apply_region(args.region)
     write_manifest(args.region)
 
     if args.all:
-        tiles = [(x, y) for y in range(base.GRID_Y) for x in range(base.GRID_X)]
+        rows = range(base.GRID_Y)
+        tiles = [(x, y) for y in rows for x in range(base.GRID_X)]
+    elif args.rows is not None:
+        start, end = args.rows
+        if start < 0 or end < start or end >= base.GRID_Y:
+            raise SystemExit(f"rows outside region: {start}..{end}; valid 0..{base.GRID_Y - 1}")
+        tiles = [(x, y) for y in range(start, end + 1) for x in range(base.GRID_X)]
     elif args.row is not None:
         if args.row < 0 or args.row >= base.GRID_Y:
             raise SystemExit(f"row outside region: {args.row}; valid 0..{base.GRID_Y - 1}")
