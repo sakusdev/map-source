@@ -33,7 +33,7 @@ on:
 
 concurrency:
   group: map-source-kanto-dem
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   plan:
