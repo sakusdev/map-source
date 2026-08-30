@@ -1,0 +1,32 @@
+{
+  "format": "GST2_REGION_INDEX",
+  "version": 1,
+  "regions": [
+    {
+      "id": "fuji",
+      "kind": "legacy-grid",
+      "center": { "lat": 35.3606, "lon": 138.7274 },
+      "coverage": {
+        "west": 138.39694505272865,
+        "south": 35.11318575812177,
+        "east": 139.05785494727132,
+        "north": 35.61621352980128
+      },
+      "grid": { "x": 15, "y": 14 },
+      "tileSizeMeters": 4000,
+      "demGrid": 129,
+      "demUrlPattern": "../dem/{x:02d}_{y:02d}.gst2"
+    },
+    {
+      "id": "kanto",
+      "kind": "region-manifest",
+      "coverage": {
+        "west": 138.34127592249274,
+        "south": 34.93501327069553,
+        "east": 141.00872407750728,
+        "north": 37.19869868510073
+      },
+      "manifest": "kanto/manifest.json"
+    }
+  ]
+}
