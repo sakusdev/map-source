@@ -1,0 +1,95 @@
+name: Generate GST2 near-detail imagery
+
+on:
+  workflow_dispatch:
+    inputs:
+      tile_x:
+        required: true
+        default: '7'
+      tile_y:
+        required: true
+        default: '7'
+      overwrite:
+        required: true
+        default: true
+        type: boolean
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/near-detail-request-seed'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: map-source-near-detail
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      GSI_REQUEST_DELAY: '0.05'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: Tools/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r Tools/requirements.txt
+
+      - name: Configure git
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Resolve tile
+        id: tile
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ "${{ github.event_name }}" == 'push' ]]; then
+            read -r x y < .github/near-detail-request-seed
+          else
+            x='${{ inputs.tile_x }}'
+            y='${{ inputs.tile_y }}'
+          fi
+          echo "x=$x" >> "$GITHUB_OUTPUT"
+          echo "y=$y" >> "$GITHUB_OUTPUT"
+          printf 'tile=%02d_%02d\n' "$x" "$y"
+
+      - name: Generate near detail
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          extra=()
+          if [[ "${{ github.event_name }}" == 'push' || "${{ inputs.overwrite }}" == 'true' ]]; then
+            extra+=(--overwrite)
+          fi
+          python Tools/build_near_detail.py --tile '${{ steps.tile.outputs.x }}' '${{ steps.tile.outputs.y }}' "${extra[@]}"
+          stem=$(printf '%02d_%02d' '${{ steps.tile.outputs.x }}' '${{ steps.tile.outputs.y }}')
+          for q in 0 1 2 3; do
+            test -s "Server/data/near/${stem}_q${q}.jpg"
+          done
+          identify Server/data/near/${stem}_q*.jpg || true
+
+      - name: Commit generated imagery
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          stem=$(printf '%02d_%02d' '${{ steps.tile.outputs.x }}' '${{ steps.tile.outputs.y }}')
+          git add Server/data/near/${stem}_q*.jpg
+          if git diff --cached --quiet; then
+            echo 'near-detail imagery unchanged'
+            exit 0
+          fi
+          git commit -m "data: add near-detail imagery ${stem}"
+          git pull --rebase origin main
+          git push origin HEAD:main
