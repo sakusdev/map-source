@@ -11,6 +11,7 @@ on:
       - 'Generate Fuji seed tile'
       - 'Generate Fuji terrain dataset'
       - 'Generate Overture building tiles'
+      - 'Generate Kanto DEM region'
     types: [completed]
   workflow_dispatch:
 
