@@ -1,0 +1,174 @@
+name: Generate Kanto DEM region
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Generation mode'
+        required: true
+        default: 'row'
+        type: choice
+        options:
+          - seed
+          - row
+          - all
+      tile_x:
+        description: 'Tile X for seed mode (0..59)'
+        required: false
+        default: '30'
+      tile_y:
+        description: 'Tile Y for seed mode (0..62)'
+        required: false
+        default: '31'
+      row_y:
+        description: 'Row Y for row mode (0..62)'
+        required: false
+        default: '31'
+      overwrite:
+        description: 'Regenerate files that already exist'
+        required: true
+        default: false
+        type: boolean
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/kanto-dem-request'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: map-source-kanto-dem
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      GSI_REQUEST_DELAY: '0.04'
+      INPUT_MODE: ${{ inputs.mode || 'all' }}
+      INPUT_TILE_X: ${{ inputs.tile_x || '30' }}
+      INPUT_TILE_Y: ${{ inputs.tile_y || '31' }}
+      INPUT_ROW_Y: ${{ inputs.row_y || '31' }}
+      INPUT_OVERWRITE: ${{ inputs.overwrite || 'false' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: Tools/requirements.txt
+
+      - name: Install generator dependencies
+        run: pip install -r Tools/requirements.txt
+
+      - name: Configure git
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Generate Kanto DEM with row checkpoints
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          MODE="$INPUT_MODE"
+          TILE_X="$INPUT_TILE_X"
+          TILE_Y="$INPUT_TILE_Y"
+          ROW_Y="$INPUT_ROW_Y"
+          OVERWRITE="$INPUT_OVERWRITE"
+
+          if [[ "$GITHUB_EVENT_NAME" == 'push' ]]; then
+            req='.github/kanto-dem-request'
+            MODE=$(awk -F= '$1=="mode" {print $2}' "$req" | tail -n1)
+            TILE_X=$(awk -F= '$1=="tile_x" {print $2}' "$req" | tail -n1)
+            TILE_Y=$(awk -F= '$1=="tile_y" {print $2}' "$req" | tail -n1)
+            ROW_Y=$(awk -F= '$1=="row_y" {print $2}' "$req" | tail -n1)
+            OVERWRITE=$(awk -F= '$1=="overwrite" {print $2}' "$req" | tail -n1)
+            MODE=${MODE:-all}
+            TILE_X=${TILE_X:-30}
+            TILE_Y=${TILE_Y:-31}
+            ROW_Y=${ROW_Y:-31}
+            OVERWRITE=${OVERWRITE:-false}
+          fi
+
+          echo "request mode=$MODE tile=$TILE_X,$TILE_Y row=$ROW_Y overwrite=$OVERWRITE"
+          case "$MODE" in seed|row|all) ;; *) echo "invalid mode: $MODE"; exit 2 ;; esac
+
+          extra=()
+          if [[ "$OVERWRITE" == 'true' ]]; then extra+=(--overwrite); fi
+
+          verify_gst2() {
+            python - "$@" <<'PY'
+          import pathlib, struct, sys
+          for raw in sys.argv[1:]:
+              p = pathlib.Path(raw)
+              b = p.read_bytes()
+              if len(b) < 16 or b[:4] != b'GST2' or b[4] != 2:
+                  raise SystemExit(f'invalid GST2 header: {p}')
+              grid = struct.unpack_from('<H', b, 6)[0]
+              expected = 16 + grid * grid * 2
+              if grid != 129 or len(b) != expected:
+                  raise SystemExit(f'invalid GST2: {p}: grid={grid} bytes={len(b)} expected={expected}')
+          print(f'GST2 OK files={len(sys.argv)-1}')
+          PY
+          }
+
+          commit_paths() {
+            local msg="$1"; shift
+            git add Server/data/regions/kanto/manifest.json "$@"
+            if ! git diff --cached --quiet; then
+              git commit -m "$msg"
+              git pull --rebase origin main
+              git push origin HEAD:main
+            else
+              echo 'checkpoint unchanged'
+            fi
+          }
+
+          if [[ "$MODE" == 'seed' ]]; then
+            python Tools/build_dem_region.py --region kanto --tile "$TILE_X" "$TILE_Y" "${extra[@]}"
+            stem=$(printf '%02d_%02d' "$TILE_X" "$TILE_Y")
+            file="Server/data/regions/kanto/dem/$stem.gst2"
+            test -s "$file"
+            verify_gst2 "$file"
+            commit_paths "data: add Kanto DEM seed $stem" "$file"
+            exit 0
+          fi
+
+          if [[ "$MODE" == 'row' ]]; then
+            python Tools/build_dem_region.py --region kanto --row "$ROW_Y" "${extra[@]}"
+            ys=$(printf '%02d' "$ROW_Y")
+            count=$(find Server/data/regions/kanto/dem -maxdepth 1 -name "??_${ys}.gst2" | wc -l)
+            test "$count" -eq 60
+            verify_gst2 Server/data/regions/kanto/dem/??_${ys}.gst2
+            commit_paths "data: add Kanto DEM row $ys" Server/data/regions/kanto/dem/??_${ys}.gst2
+            exit 0
+          fi
+
+          for y in $(seq 0 62); do
+            ys=$(printf '%02d' "$y")
+            echo "===== KANTO DEM ROW $ys / 62 ====="
+            python Tools/build_dem_region.py --region kanto --row "$y" "${extra[@]}"
+            count=$(find Server/data/regions/kanto/dem -maxdepth 1 -name "??_${ys}.gst2" | wc -l)
+            echo "row=$ys dem=$count"
+            test "$count" -eq 60
+            verify_gst2 Server/data/regions/kanto/dem/??_${ys}.gst2
+            commit_paths "data: add Kanto DEM row $ys" Server/data/regions/kanto/dem/??_${ys}.gst2
+          done
+
+      - name: Verify Kanto region
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.mode == 'all') || github.event_name == 'push' }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -s Server/data/regions/kanto/manifest.json
+          count=$(find Server/data/regions/kanto/dem -maxdepth 1 -name '*.gst2' | wc -l)
+          echo "Kanto GST2 tiles=$count expected=3780"
+          test "$count" -eq 3780
+          du -sh Server/data/regions/kanto
