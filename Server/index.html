@@ -1,16 +1,24 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>GSI Streaming Terrain v2 dataset</title>
+<title>GST2 streaming terrain data</title>
 <style>
-body{font-family:system-ui,sans-serif;max-width:760px;margin:48px auto;padding:0 20px;line-height:1.6}code{background:#eee;padding:.15em .35em;border-radius:4px}@media(prefers-color-scheme:dark){body{background:#111;color:#eee}code{background:#222}}
+body{font-family:system-ui,sans-serif;max-width:820px;margin:48px auto;padding:0 20px;line-height:1.6}code{background:#eee;padding:.15em .35em;border-radius:4px}@media(prefers-color-scheme:dark){body{background:#111;color:#eee}code{background:#222}}
 </style>
-<h1>GSI Streaming Terrain v2</h1>
+<h1>GST2 Streaming Terrain</h1>
 <p>This GitHub Pages site serves static terrain streaming data for VRChat from <code>sakusdev/map-source</code>.</p>
+<h2>Fuji legacy region</h2>
 <ul>
 <li><code>/data/pc/XX_YY.jpg</code> — PC imagery</li>
 <li><code>/data/quest/XX_YY.jpg</code> — Quest imagery</li>
-<li><code>/data/dem/XX_YY.gst2</code> — runtime DEM</li>
-<li><code>/data/manifest.json</code> — build metadata</li>
+<li><code>/data/dem/XX_YY.gst2</code> — 129×129 runtime DEM</li>
+<li><code>/data/near/...</code> — near-detail imagery</li>
 </ul>
+<h2>Regional DEM streaming</h2>
+<ul>
+<li><code>/data/regions/index.json</code> — region coverage index</li>
+<li><code>/data/regions/kanto/manifest.json</code> — Kanto grid metadata</li>
+<li><code>/data/regions/kanto/dem/XX_YY.gst2</code> — Kanto 4 km / 129×129 DEM tiles</li>
+</ul>
+<p>Kanto coverage is approximately 138.34–141.01°E, 34.94–37.20°N (60×63 = 3,780 supertiles).</p>
 <p><a href="DATA_ATTRIBUTION.md">Data attribution</a></p>
-<p>The VRChat world uses editor-generated VRCUrl entries and does not depend on this page itself.</p>
+<p>VRChat clients consume editor-generated VRCUrl entries; the region index is intended for the next region-paged streaming architecture.</p>
