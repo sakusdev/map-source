@@ -1,0 +1,119 @@
+name: Generate Kanto imagery prototype
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        required: true
+        default: 'seed'
+        type: choice
+        options: [seed, row]
+      tier:
+        required: true
+        default: 'far'
+        type: choice
+        options: [far, base]
+      tile_x:
+        required: false
+        default: '30'
+      tile_y:
+        required: false
+        default: '31'
+      row_y:
+        required: false
+        default: '31'
+      overwrite:
+        required: true
+        default: true
+        type: boolean
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/kanto-imagery-request'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: map-source-kanto-imagery
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      GSI_REQUEST_DELAY: '0.05'
+      GSI_HTTP_TIMEOUT: '20'
+      GSI_HTTP_ATTEMPTS: '5'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: Tools/requirements.txt
+      - run: pip install -r Tools/requirements.txt
+      - name: Resolve request
+        id: req
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ "${{ github.event_name }}" == 'push' ]]; then
+            read -r mode tier x y row < .github/kanto-imagery-request
+            mode=${mode:-seed}; tier=${tier:-far}; x=${x:-30}; y=${y:-31}; row=${row:-31}
+          else
+            mode='${{ inputs.mode }}'; tier='${{ inputs.tier }}'; x='${{ inputs.tile_x }}'; y='${{ inputs.tile_y }}'; row='${{ inputs.row_y }}'
+          fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "tier=$tier" >> "$GITHUB_OUTPUT"
+          echo "x=$x" >> "$GITHUB_OUTPUT"
+          echo "y=$y" >> "$GITHUB_OUTPUT"
+          echo "row=$row" >> "$GITHUB_OUTPUT"
+          echo "Kanto imagery request mode=$mode tier=$tier tile=$x,$y row=$row"
+      - name: Generate imagery
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mode='${{ steps.req.outputs.mode }}'
+          tier='${{ steps.req.outputs.tier }}'
+          extra=()
+          if [[ "${{ github.event_name }}" == 'push' || "${{ inputs.overwrite }}" == 'true' ]]; then extra+=(--overwrite); fi
+          if [[ "$mode" == seed ]]; then
+            python Tools/build_region_imagery.py --region kanto --tier "$tier" --tile '${{ steps.req.outputs.x }}' '${{ steps.req.outputs.y }}' "${extra[@]}"
+          elif [[ "$mode" == row ]]; then
+            python Tools/build_region_imagery.py --region kanto --tier "$tier" --row '${{ steps.req.outputs.row }}' "${extra[@]}"
+          else
+            echo "unsupported mode=$mode"; exit 2
+          fi
+      - name: Validate and publish
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          tier='${{ steps.req.outputs.tier }}'
+          root="Server/data/regions/kanto/img/$tier"
+          test -s "$root/manifest.json"
+          count=$(find "$root" -maxdepth 1 -name '*.jpg' | wc -l)
+          echo "Kanto imagery files=$count tier=$tier"
+          test "$count" -gt 0
+          python - <<'PY'
+          from pathlib import Path
+          from PIL import Image
+          root = Path('Server/data/regions/kanto/img/${{ steps.req.outputs.tier }}')
+          for p in sorted(root.glob('*.jpg')):
+              with Image.open(p) as im:
+                  im.verify()
+              print(p, p.stat().st_size)
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add "$root"
+          if git diff --cached --quiet; then
+            echo 'Kanto imagery unchanged'
+            exit 0
+          fi
+          git commit -m "data: add Kanto $tier imagery prototype"
+          git pull --rebase origin main
+          git push origin HEAD:main
