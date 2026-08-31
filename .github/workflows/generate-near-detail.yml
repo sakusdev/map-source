@@ -3,6 +3,11 @@ name: Generate GST2 near-detail imagery
 on:
   workflow_dispatch:
     inputs:
+      region:
+        required: true
+        default: 'legacy'
+        type: choice
+        options: [legacy, kanto]
       tile_x:
         required: true
         default: '7'
@@ -34,9 +39,11 @@ concurrency:
 jobs:
   generate:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     env:
       GSI_REQUEST_DELAY: '0.05'
+      GSI_HTTP_TIMEOUT: '20'
+      GSI_HTTP_ATTEMPTS: '5'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -62,20 +69,24 @@ jobs:
         run: |
           set -Eeuo pipefail
           if [[ "${{ github.event_name }}" == 'push' ]]; then
-            read -r x y source_zoom subdivision < .github/near-detail-request-seed
+            read -r x y source_zoom subdivision region < .github/near-detail-request-seed
             source_zoom=${source_zoom:-18}
             subdivision=${subdivision:-4}
+            region=${region:-legacy}
           else
+            region='${{ inputs.region }}'
             x='${{ inputs.tile_x }}'
             y='${{ inputs.tile_y }}'
             source_zoom='${{ inputs.source_zoom }}'
             subdivision='${{ inputs.subdivision }}'
           fi
+          case "$region" in legacy|kanto) ;; *) echo "invalid region=$region"; exit 2 ;; esac
+          echo "region=$region" >> "$GITHUB_OUTPUT"
           echo "x=$x" >> "$GITHUB_OUTPUT"
           echo "y=$y" >> "$GITHUB_OUTPUT"
           echo "source_zoom=$source_zoom" >> "$GITHUB_OUTPUT"
           echo "subdivision=$subdivision" >> "$GITHUB_OUTPUT"
-          printf 'tile=%02d_%02d sourceZ=%s subdivision=%s\n' "$x" "$y" "$source_zoom" "$subdivision"
+          printf 'region=%s tile=%02d_%02d sourceZ=%s subdivision=%s\n' "$region" "$x" "$y" "$source_zoom" "$subdivision"
 
       - name: Generate near detail
         shell: bash
@@ -85,13 +96,20 @@ jobs:
           if [[ "${{ github.event_name }}" == 'push' || "${{ inputs.overwrite }}" == 'true' ]]; then
             extra+=(--overwrite)
           fi
+          region='${{ steps.tile.outputs.region }}'
           x='${{ steps.tile.outputs.x }}'
           y='${{ steps.tile.outputs.y }}'
           z='${{ steps.tile.outputs.source_zoom }}'
           s='${{ steps.tile.outputs.subdivision }}'
-          python Tools/build_near_detail.py --tile "$x" "$y" --source-zoom "$z" --subdivision "$s" "${extra[@]}"
+          python Tools/build_near_detail.py --region "$region" --tile "$x" "$y" --source-zoom "$z" --subdivision "$s" "${extra[@]}"
           stem=$(printf '%02d_%02d' "$x" "$y")
-          root="Server/data/near-z${z}-s${s}"
+          if [[ "$region" == legacy ]]; then
+            root="Server/data/near-z${z}-s${s}"
+          else
+            root="Server/data/regions/${region}/near-z${z}-s${s}"
+          fi
+          echo "root=$root" >> "$GITHUB_ENV"
+          echo "stem=$stem" >> "$GITHUB_ENV"
           expected=$((s * s))
           count=$(find "$root" -maxdepth 1 -name "${stem}_c*.jpg" | wc -l)
           echo "near cells=$count expected=$expected root=$root"
@@ -103,17 +121,14 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          x='${{ steps.tile.outputs.x }}'
-          y='${{ steps.tile.outputs.y }}'
+          region='${{ steps.tile.outputs.region }}'
           z='${{ steps.tile.outputs.source_zoom }}'
           s='${{ steps.tile.outputs.subdivision }}'
-          stem=$(printf '%02d_%02d' "$x" "$y")
-          root="Server/data/near-z${z}-s${s}"
           git add "$root/${stem}.json" "$root"/${stem}_c*.jpg
           if git diff --cached --quiet; then
             echo 'near-detail imagery unchanged'
             exit 0
           fi
-          git commit -m "data: add Z${z} ${s}x${s} near-detail imagery ${stem}"
+          git commit -m "data: add ${region} Z${z} ${s}x${s} near-detail imagery ${stem}"
           git pull --rebase origin main
           git push origin HEAD:main
