@@ -12,6 +12,7 @@ on:
       - 'Generate Fuji terrain dataset'
       - 'Generate Overture building tiles'
       - 'Generate Kanto DEM region'
+      - 'Generate GST2 near-detail imagery'
     types: [completed]
   workflow_dispatch:
 
