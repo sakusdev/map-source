@@ -81,8 +81,8 @@ jobs:
       contents: write
     env:
       GSI_REQUEST_DELAY: '0.08'
-      GSI_HTTP_TIMEOUT: '12'
-      GSI_HTTP_ATTEMPTS: '2'
+      GSI_HTTP_TIMEOUT: '20'
+      GSI_HTTP_ATTEMPTS: '6'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -142,8 +142,8 @@ jobs:
     timeout-minutes: 240
     env:
       GSI_REQUEST_DELAY: '0.08'
-      GSI_HTTP_TIMEOUT: '12'
-      GSI_HTTP_ATTEMPTS: '2'
+      GSI_HTTP_TIMEOUT: '20'
+      GSI_HTTP_ATTEMPTS: '6'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
