@@ -1,0 +1,16 @@
+{
+  "format": "GST2_REGION_IMAGERY",
+  "version": 1,
+  "region": "kanto",
+  "tier": "far",
+  "source": "GSI seamlessphoto",
+  "sourceZoom": 14,
+  "imageSize": 512,
+  "jpegQuality": 76,
+  "tileSizeMeters": 4000.0,
+  "grid": {
+    "x": 60,
+    "y": 63
+  },
+  "urlPattern": "{x:02d}_{y:02d}.jpg"
+}
