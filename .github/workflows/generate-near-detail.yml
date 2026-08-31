@@ -9,6 +9,12 @@ on:
       tile_y:
         required: true
         default: '7'
+      source_zoom:
+        required: true
+        default: '18'
+      subdivision:
+        required: true
+        default: '4'
       overwrite:
         required: true
         default: true
@@ -50,20 +56,26 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
 
-      - name: Resolve tile
+      - name: Resolve tile and quality
         id: tile
         shell: bash
         run: |
           set -Eeuo pipefail
           if [[ "${{ github.event_name }}" == 'push' ]]; then
-            read -r x y < .github/near-detail-request-seed
+            read -r x y source_zoom subdivision < .github/near-detail-request-seed
+            source_zoom=${source_zoom:-18}
+            subdivision=${subdivision:-4}
           else
             x='${{ inputs.tile_x }}'
             y='${{ inputs.tile_y }}'
+            source_zoom='${{ inputs.source_zoom }}'
+            subdivision='${{ inputs.subdivision }}'
           fi
           echo "x=$x" >> "$GITHUB_OUTPUT"
           echo "y=$y" >> "$GITHUB_OUTPUT"
-          printf 'tile=%02d_%02d\n' "$x" "$y"
+          echo "source_zoom=$source_zoom" >> "$GITHUB_OUTPUT"
+          echo "subdivision=$subdivision" >> "$GITHUB_OUTPUT"
+          printf 'tile=%02d_%02d sourceZ=%s subdivision=%s\n' "$x" "$y" "$source_zoom" "$subdivision"
 
       - name: Generate near detail
         shell: bash
@@ -73,23 +85,35 @@ jobs:
           if [[ "${{ github.event_name }}" == 'push' || "${{ inputs.overwrite }}" == 'true' ]]; then
             extra+=(--overwrite)
           fi
-          python Tools/build_near_detail.py --tile '${{ steps.tile.outputs.x }}' '${{ steps.tile.outputs.y }}' "${extra[@]}"
-          stem=$(printf '%02d_%02d' '${{ steps.tile.outputs.x }}' '${{ steps.tile.outputs.y }}')
-          for q in 0 1 2 3; do
-            test -s "Server/data/near/${stem}_q${q}.jpg"
-          done
-          identify Server/data/near/${stem}_q*.jpg || true
+          x='${{ steps.tile.outputs.x }}'
+          y='${{ steps.tile.outputs.y }}'
+          z='${{ steps.tile.outputs.source_zoom }}'
+          s='${{ steps.tile.outputs.subdivision }}'
+          python Tools/build_near_detail.py --tile "$x" "$y" --source-zoom "$z" --subdivision "$s" "${extra[@]}"
+          stem=$(printf '%02d_%02d' "$x" "$y")
+          root="Server/data/near-z${z}-s${s}"
+          expected=$((s * s))
+          count=$(find "$root" -maxdepth 1 -name "${stem}_c*.jpg" | wc -l)
+          echo "near cells=$count expected=$expected root=$root"
+          test "$count" -eq "$expected"
+          test -s "$root/${stem}.json"
+          identify "$root"/${stem}_c*.jpg | head -n 20 || true
 
       - name: Commit generated imagery
         shell: bash
         run: |
           set -Eeuo pipefail
-          stem=$(printf '%02d_%02d' '${{ steps.tile.outputs.x }}' '${{ steps.tile.outputs.y }}')
-          git add Server/data/near/${stem}_q*.jpg
+          x='${{ steps.tile.outputs.x }}'
+          y='${{ steps.tile.outputs.y }}'
+          z='${{ steps.tile.outputs.source_zoom }}'
+          s='${{ steps.tile.outputs.subdivision }}'
+          stem=$(printf '%02d_%02d' "$x" "$y")
+          root="Server/data/near-z${z}-s${s}"
+          git add "$root/${stem}.json" "$root"/${stem}_c*.jpg
           if git diff --cached --quiet; then
             echo 'near-detail imagery unchanged'
             exit 0
           fi
-          git commit -m "data: add near-detail imagery ${stem}"
+          git commit -m "data: add Z${z} ${s}x${s} near-detail imagery ${stem}"
           git pull --rebase origin main
           git push origin HEAD:main
