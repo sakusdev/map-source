@@ -6,6 +6,7 @@ import functools
 import json
 import math
 import os
+import random
 import time
 import urllib.error
 import urllib.request
@@ -29,14 +30,16 @@ REGIONS = {
     },
 }
 
+TRANSIENT_HTTP_CODES = {408, 425, 429, 500, 502, 503, 504}
+
 
 def regional_fetch_cached(url: str, path: Path, timeout: int = 45) -> bytes:
-    """Bound regional generation stalls without changing the legacy Fuji builder."""
+    """Fetch GSI data with bounded but resilient retries for regional builds."""
     if path.is_file() and path.stat().st_size > 0:
         return path.read_bytes()
 
-    timeout = float(os.environ.get("GSI_HTTP_TIMEOUT", "12"))
-    attempts = max(1, int(os.environ.get("GSI_HTTP_ATTEMPTS", "2")))
+    timeout = float(os.environ.get("GSI_HTTP_TIMEOUT", "20"))
+    attempts = max(1, int(os.environ.get("GSI_HTTP_ATTEMPTS", "6")))
     path.parent.mkdir(parents=True, exist_ok=True)
     req = urllib.request.Request(url, headers={"User-Agent": base.USER_AGENT})
     last_error: Exception | None = None
@@ -51,12 +54,35 @@ def regional_fetch_cached(url: str, path: Path, timeout: int = 45) -> bytes:
                 raise IOError("empty response")
             path.write_bytes(data)
             return data
-        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as exc:
+        except urllib.error.HTTPError as exc:
             last_error = exc
-            if isinstance(exc, urllib.error.HTTPError) and exc.code == 404:
+            if exc.code == 404:
                 raise
-            if attempt + 1 < attempts:
-                time.sleep(1.0 * (2 ** attempt))
+            if exc.code not in TRANSIENT_HTTP_CODES:
+                raise
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            last_error = exc
+
+        if attempt + 1 < attempts:
+            retry_after = 0.0
+            if isinstance(last_error, urllib.error.HTTPError):
+                raw_retry_after = last_error.headers.get("Retry-After")
+                if raw_retry_after:
+                    try:
+                        retry_after = max(0.0, float(raw_retry_after))
+                    except ValueError:
+                        retry_after = 0.0
+
+            backoff = min(20.0, 1.5 * (2 ** attempt))
+            delay = max(retry_after, backoff) + random.uniform(0.0, 0.75)
+            print(
+                "GSI transient fetch error",
+                repr(last_error),
+                f"attempt={attempt + 1}/{attempts}",
+                f"retry_in={delay:.2f}s",
+                url,
+            )
+            time.sleep(delay)
 
     assert last_error is not None
     raise last_error
@@ -82,8 +108,9 @@ def apply_region(region_id: str) -> dict:
     base.DEM_Z = int(cfg["dem_z"])
     base.OUT_DEM = ROOT / "Server/data/regions" / region_id / "dem"
 
-    # Kanto generation may touch thousands of source tiles. Keep transient
-    # GSI stalls bounded and fall through to the next DEM source quickly.
+    # Kanto generation may touch thousands of source tiles. Retry transient GSI
+    # failures aggressively enough that a single 5xx does not kill a multi-hour
+    # shard, while still keeping every individual request bounded.
     base.fetch_cached = regional_fetch_cached
 
     # Adjacent 4 km supertiles reuse most Z14 DEM source tiles. Keep only a
