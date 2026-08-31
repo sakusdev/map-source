@@ -7,7 +7,7 @@ on:
         required: true
         default: 'seed'
         type: choice
-        options: [seed, row]
+        options: [seed, row, all]
       tier:
         required: true
         default: 'far'
@@ -39,11 +39,54 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  generate:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      mode: ${{ steps.req.outputs.mode }}
+      tier: ${{ steps.req.outputs.tier }}
+      x: ${{ steps.req.outputs.x }}
+      y: ${{ steps.req.outputs.y }}
+      row: ${{ steps.req.outputs.row }}
+      overwrite: ${{ steps.req.outputs.overwrite }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve request
+        id: req
+        shell: bash
+        env:
+          DISPATCH_MODE: ${{ inputs.mode || 'seed' }}
+          DISPATCH_TIER: ${{ inputs.tier || 'far' }}
+          DISPATCH_X: ${{ inputs.tile_x || '30' }}
+          DISPATCH_Y: ${{ inputs.tile_y || '31' }}
+          DISPATCH_ROW: ${{ inputs.row_y || '31' }}
+          DISPATCH_OVERWRITE: ${{ inputs.overwrite || 'false' }}
+        run: |
+          set -Eeuo pipefail
+          mode="$DISPATCH_MODE"; tier="$DISPATCH_TIER"; x="$DISPATCH_X"; y="$DISPATCH_Y"; row="$DISPATCH_ROW"; overwrite="$DISPATCH_OVERWRITE"
+          if [[ "${GITHUB_EVENT_NAME}" == 'push' ]]; then
+            read -r mode tier x y row < .github/kanto-imagery-request
+            mode=${mode:-seed}; tier=${tier:-far}; x=${x:-30}; y=${y:-31}; row=${row:-31}; overwrite=true
+          fi
+          case "$mode" in seed|row|all) ;; *) echo "invalid mode=$mode"; exit 2 ;; esac
+          case "$tier" in far|base) ;; *) echo "invalid tier=$tier"; exit 2 ;; esac
+          if [[ "$mode" == all && "$tier" != far ]]; then
+            echo 'full-region generation is intentionally limited to the lightweight far tier'; exit 2
+          fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "tier=$tier" >> "$GITHUB_OUTPUT"
+          echo "x=$x" >> "$GITHUB_OUTPUT"
+          echo "y=$y" >> "$GITHUB_OUTPUT"
+          echo "row=$row" >> "$GITHUB_OUTPUT"
+          echo "overwrite=$overwrite" >> "$GITHUB_OUTPUT"
+          echo "Kanto imagery request mode=$mode tier=$tier tile=$x,$y row=$row overwrite=$overwrite"
+
+  small:
+    if: needs.plan.outputs.mode != 'all'
+    needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
-      GSI_REQUEST_DELAY: '0.05'
+      GSI_REQUEST_DELAY: '0.08'
       GSI_HTTP_TIMEOUT: '20'
       GSI_HTTP_ATTEMPTS: '5'
     steps:
@@ -56,64 +99,153 @@ jobs:
           cache: pip
           cache-dependency-path: Tools/requirements.txt
       - run: pip install -r Tools/requirements.txt
-      - name: Resolve request
-        id: req
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          if [[ "${{ github.event_name }}" == 'push' ]]; then
-            read -r mode tier x y row < .github/kanto-imagery-request
-            mode=${mode:-seed}; tier=${tier:-far}; x=${x:-30}; y=${y:-31}; row=${row:-31}
-          else
-            mode='${{ inputs.mode }}'; tier='${{ inputs.tier }}'; x='${{ inputs.tile_x }}'; y='${{ inputs.tile_y }}'; row='${{ inputs.row_y }}'
-          fi
-          echo "mode=$mode" >> "$GITHUB_OUTPUT"
-          echo "tier=$tier" >> "$GITHUB_OUTPUT"
-          echo "x=$x" >> "$GITHUB_OUTPUT"
-          echo "y=$y" >> "$GITHUB_OUTPUT"
-          echo "row=$row" >> "$GITHUB_OUTPUT"
-          echo "Kanto imagery request mode=$mode tier=$tier tile=$x,$y row=$row"
       - name: Generate imagery
         shell: bash
         run: |
           set -Eeuo pipefail
-          mode='${{ steps.req.outputs.mode }}'
-          tier='${{ steps.req.outputs.tier }}'
-          extra=()
-          if [[ "${{ github.event_name }}" == 'push' || "${{ inputs.overwrite }}" == 'true' ]]; then extra+=(--overwrite); fi
+          mode='${{ needs.plan.outputs.mode }}'; tier='${{ needs.plan.outputs.tier }}'
+          extra=(); if [[ '${{ needs.plan.outputs.overwrite }}' == 'true' ]]; then extra+=(--overwrite); fi
           if [[ "$mode" == seed ]]; then
-            python Tools/build_region_imagery.py --region kanto --tier "$tier" --tile '${{ steps.req.outputs.x }}' '${{ steps.req.outputs.y }}' "${extra[@]}"
-          elif [[ "$mode" == row ]]; then
-            python Tools/build_region_imagery.py --region kanto --tier "$tier" --row '${{ steps.req.outputs.row }}' "${extra[@]}"
+            python Tools/build_region_imagery.py --region kanto --tier "$tier" --tile '${{ needs.plan.outputs.x }}' '${{ needs.plan.outputs.y }}' "${extra[@]}"
           else
-            echo "unsupported mode=$mode"; exit 2
+            python Tools/build_region_imagery.py --region kanto --tier "$tier" --row '${{ needs.plan.outputs.row }}' "${extra[@]}"
           fi
       - name: Validate and publish
         shell: bash
         run: |
           set -Eeuo pipefail
-          tier='${{ steps.req.outputs.tier }}'
-          root="Server/data/regions/kanto/img/$tier"
+          tier='${{ needs.plan.outputs.tier }}'; root="Server/data/regions/kanto/img/$tier"
           test -s "$root/manifest.json"
           count=$(find "$root" -maxdepth 1 -name '*.jpg' | wc -l)
-          echo "Kanto imagery files=$count tier=$tier"
-          test "$count" -gt 0
+          echo "Kanto imagery files=$count tier=$tier"; test "$count" -gt 0
           python - <<'PY'
           from pathlib import Path
           from PIL import Image
-          root = Path('Server/data/regions/kanto/img/${{ steps.req.outputs.tier }}')
+          root = Path('Server/data/regions/kanto/img/${{ needs.plan.outputs.tier }}')
           for p in sorted(root.glob('*.jpg')):
-              with Image.open(p) as im:
-                  im.verify()
-              print(p, p.stat().st_size)
+              with Image.open(p) as im: im.verify()
+          print('validated imagery', len(list(root.glob('*.jpg'))))
           PY
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add "$root"
-          if git diff --cached --quiet; then
-            echo 'Kanto imagery unchanged'
-            exit 0
+          if ! git diff --cached --quiet; then
+            git commit -m "data: add Kanto $tier imagery checkpoint"
+            git pull --rebase origin main
+            git push origin HEAD:main
           fi
-          git commit -m "data: add Kanto $tier imagery prototype"
-          git pull --rebase origin main
-          git push origin HEAD:main
+
+  full-generate:
+    if: needs.plan.outputs.mode == 'all'
+    needs: plan
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8]
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      GSI_REQUEST_DELAY: '0.12'
+      GSI_HTTP_TIMEOUT: '20'
+      GSI_HTTP_ATTEMPTS: '5'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: Tools/requirements.txt
+      - run: pip install -r Tools/requirements.txt
+      - name: Generate contiguous far-imagery shard
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf Server/data/regions/kanto/img/far
+          start=$(( ${{ matrix.shard }} * 7 )); end=$(( start + 6 )); if (( end > 62 )); then end=62; fi
+          echo "imagery shard=${{ matrix.shard }} rows=$start..$end"
+          python Tools/build_region_imagery.py --region kanto --tier far --rows "$start" "$end" --overwrite
+          expected=$(( (end - start + 1) * 60 ))
+          count=$(find Server/data/regions/kanto/img/far -maxdepth 1 -name '*.jpg' | wc -l)
+          echo "imagery shard files=$count expected=$expected"; test "$count" -eq "$expected"
+          python - <<'PY'
+          from pathlib import Path
+          from PIL import Image
+          files = sorted(Path('Server/data/regions/kanto/img/far').glob('*.jpg'))
+          for p in files:
+              with Image.open(p) as im:
+                  assert im.size == (512, 512), (p, im.size)
+                  im.verify()
+          print('validated far imagery shard', len(files))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kanto-far-imagery-shard-${{ matrix.shard }}
+          path: Server/data/regions/kanto/img/far/*.jpg
+          if-no-files-found: error
+          retention-days: 2
+          compression-level: 0
+
+  full-publish:
+    if: needs.plan.outputs.mode == 'all'
+    needs: [plan, full-generate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: Tools/requirements.txt
+      - run: pip install -r Tools/requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: kanto-far-imagery-shard-*
+          path: _kanto_far
+          merge-multiple: true
+      - name: Assemble and verify complete far tier
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p Server/data/regions/kanto/img/far
+          cp _kanto_far/*.jpg Server/data/regions/kanto/img/far/
+          python Tools/build_region_imagery.py --region kanto --tier far --tile 30 31
+          count=$(find Server/data/regions/kanto/img/far -maxdepth 1 -name '*.jpg' | wc -l)
+          echo "Kanto far imagery tiles=$count expected=3780"; test "$count" -eq 3780
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from PIL import Image
+          root = Path('Server/data/regions/kanto/img/far')
+          manifest = json.loads((root / 'manifest.json').read_text())
+          assert manifest['grid'] == {'x': 60, 'y': 63}
+          assert manifest['imageSize'] == 512
+          files = sorted(root.glob('*.jpg'))
+          assert len(files) == 3780
+          total = 0
+          for p in files:
+              total += p.stat().st_size
+              with Image.open(p) as im:
+                  assert im.size == (512, 512), (p, im.size)
+                  im.verify()
+          print('complete Kanto far imagery validation OK:', len(files), 'bytes=', total)
+          PY
+          du -sh Server/data/regions/kanto/img/far
+      - name: Commit complete far tier
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Server/data/regions/kanto/img/far
+          if ! git diff --cached --quiet; then
+            git commit -m 'data: publish complete Kanto far imagery region'
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
