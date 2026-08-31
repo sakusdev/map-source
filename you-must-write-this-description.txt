@@ -1,0 +1,24 @@
+YOU MUST WRITE THIS DESCRIPTION / 利用時の必須表記
+====================================================
+
+このリポジトリ（sakusdev/map-source）が配信・生成する地形データ、標高データ、画像、建物データ等をゲーム、VRChatワールド、アプリケーションその他の公開コンテンツで使用する場合、公開されている説明欄・クレジット欄等の利用者が確認できる場所に、少なくとも以下の文章を記載してください。
+
+----- COPY FROM HERE / ここからコピー -----
+地形・標高データ：国土地理院「地理院タイル」を加工して使用しています。
+Terrain streaming/data processing: sakusdev/map-source
+Data attribution: https://github.com/sakusdev/map-source/blob/main/DATA_ATTRIBUTION.md
+----- COPY TO HERE / ここまでコピー -----
+
+建物データ（GSB1 / Overture Buildings）を使用する場合は、上記に加えて以下も必ず記載してください。
+
+----- BUILDINGS CREDIT -----
+Buildings: Overture Maps Foundation / © OpenStreetMap contributors — ODbL 1.0
+Full attribution: https://github.com/sakusdev/map-source/blob/main/DATA_ATTRIBUTION.md
+----- END BUILDINGS CREDIT -----
+
+注意
+----
+- 出典表記を削除したり、出典が不明になるように改変しないでください。
+- 使用する地理院タイルの画像レイヤーによっては、国土地理院以外の追加の出典表記が必要な場合があります。公開前に DATA_ATTRIBUTION.md および当該地理院タイルのレイヤーメタデータを確認してください。
+- Overture Buildings を使用する場合、ODbL 1.0 および Overture Maps Foundation が案内する出典条件にも従ってください。
+- このリポジトリの配信データはゲーム向けに加工されたものであり、測量・航法・地籍その他の公的または高精度な地理情報用途を目的としたものではありません。
