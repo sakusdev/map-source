@@ -1,0 +1,15 @@
+{
+  "format": "GST2_NEAR",
+  "version": 2,
+  "tile": {
+    "x": 7,
+    "y": 7
+  },
+  "sourceZoom": 18,
+  "subdivision": 4,
+  "cellSizeMeters": 1000.0,
+  "imageSize": 2048,
+  "jpegQuality": 90,
+  "cellIndex": "south-row-major: index=y*subdivision+x",
+  "urlPattern": "07_07_c{index:02d}.jpg"
+}
