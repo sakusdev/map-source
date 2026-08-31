@@ -6,7 +6,7 @@ This project uses processed geospatial data from several upstream sources. Gener
 
 地形標高データ：地理院タイル（標高タイル（基盤地図情報数値標高モデル））を加工して作成。
 
-Source: Geospatial Information Authority of Japan (国土地理院).
+Source: Geospatial Information Authority of Japan (国土地理院). link: https://maps.gsi.go.jp/development/ichiran.html
 
 The runtime `.gst2` files are resampled and quantized derivatives for VRChat terrain streaming.
 
