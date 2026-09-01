@@ -5,6 +5,7 @@ on:
     branches: [ main ]
     paths:
       - 'Server/**'
+      - '!Server/data/regions/kanto/near-z18-s4/**'
       - '.github/workflows/deploy-pages.yml'
   workflow_run:
     workflows:
@@ -13,6 +14,7 @@ on:
       - 'Generate Overture building tiles'
       - 'Generate Kanto DEM region'
       - 'Generate GST2 near-detail imagery'
+      - 'Generate Kanto near-detail region'
     types: [completed]
   workflow_dispatch:
 
