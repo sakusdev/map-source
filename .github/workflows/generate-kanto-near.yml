@@ -1,0 +1,153 @@
+name: Generate Kanto near-detail region
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_minutes:
+        description: 'Generation budget in minutes'
+        required: true
+        default: '285'
+      batch_tiles:
+        description: 'Completed 4km tiles per commit batch'
+        required: true
+        default: '4'
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/kanto-near-request'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: map-source-kanto-near
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 315
+    env:
+      GSI_REQUEST_DELAY: '0.05'
+      GSI_HTTP_TIMEOUT: '25'
+      GSI_HTTP_ATTEMPTS: '6'
+      ROOT_NEAR: Server/data/regions/kanto/near-z18-s4
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: Tools/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r Tools/requirements.txt
+
+      - name: Configure git
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Generate, checkpoint, and continue
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ "${{ github.event_name }}" == 'workflow_dispatch' ]]; then
+            run_minutes='${{ inputs.run_minutes }}'
+            batch_tiles='${{ inputs.batch_tiles }}'
+          else
+            run_minutes=285
+            batch_tiles=4
+          fi
+          [[ "$run_minutes" =~ ^[0-9]+$ ]] || { echo "invalid run_minutes=$run_minutes"; exit 2; }
+          [[ "$batch_tiles" =~ ^[1-9][0-9]*$ ]] || { echo "invalid batch_tiles=$batch_tiles"; exit 2; }
+
+          deadline=$(( $(date +%s) + run_minutes * 60 ))
+          batches=0
+          total_committed=0
+          fail_streak=0
+          mkdir -p "$ROOT_NEAR"
+
+          while (( $(date +%s) < deadline )); do
+            echo "=== Kanto near batch $((batches + 1)) ==="
+            before=$(git status --porcelain -- "$ROOT_NEAR" | wc -l)
+            if ! python Tools/build_near_region.py \
+              --region kanto \
+              --source-zoom 18 \
+              --subdivision 4 \
+              --max-tiles "$batch_tiles" \
+              --max-seconds 1500 \
+              --tile-attempts 2; then
+              fail_streak=$((fail_streak + 1))
+              echo "near batch failed streak=$fail_streak"
+              git clean -fd -- "$ROOT_NEAR" || true
+              git checkout -- "$ROOT_NEAR" 2>/dev/null || true
+              if (( fail_streak >= 4 )); then
+                echo 'four consecutive batches failed; aborting'
+                exit 1
+              fi
+              sleep 30
+              continue
+            fi
+            fail_streak=0
+
+            git add "$ROOT_NEAR"
+            if git diff --cached --quiet; then
+              echo 'no new complete near-detail tiles; region may be complete'
+              break
+            fi
+
+            tiles=$(git diff --cached --name-only -- "$ROOT_NEAR" | grep -E '\.json$' | wc -l)
+            files=$(git diff --cached --name-only -- "$ROOT_NEAR" | wc -l)
+            bytes=$(git diff --cached --numstat -- "$ROOT_NEAR" | awk '{add+=$1; del+=$2} END {print add+del+0}')
+            echo "checkpoint tiles=$tiles files=$files textLines=$bytes"
+            git commit -m "data: expand kanto Z18 near-detail (+${tiles} tiles)"
+
+            pushed=0
+            for attempt in 1 2 3 4 5; do
+              if git pull --rebase origin main && git push origin HEAD:main; then
+                pushed=1
+                break
+              fi
+              echo "push retry $attempt/5"
+              git rebase --abort 2>/dev/null || true
+              sleep $((attempt * 5))
+            done
+            if (( pushed == 0 )); then
+              echo 'could not checkpoint generated imagery'
+              exit 1
+            fi
+
+            batches=$((batches + 1))
+            total_committed=$((total_committed + tiles))
+            echo "KANTO_NEAR_CHECKPOINT batches=$batches totalTiles=$total_committed"
+            sleep 2
+          done
+
+          echo "KANTO_NEAR_RUN_DONE batches=$batches committedTiles=$total_committed"
+
+      - name: Summarize coverage
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          root = Path('Server/data/regions/kanto/near-z18-s4')
+          complete = 0
+          incomplete = []
+          for y in range(63):
+              for x in range(60):
+                  stem = f'{x:02d}_{y:02d}'
+                  meta = root / f'{stem}.json'
+                  cells = [root / f'{stem}_c{i:02d}.jpg' for i in range(16)]
+                  if meta.is_file() and meta.stat().st_size > 0 and all(p.is_file() and p.stat().st_size > 0 for p in cells):
+                      complete += 1
+                  elif meta.exists() or any(p.exists() for p in cells):
+                      incomplete.append(stem)
+          print(f'KANTO_NEAR_COVERAGE complete={complete}/3780 remaining={3780-complete} incomplete={len(incomplete)}')
+          if incomplete:
+              print('incomplete:', ' '.join(incomplete[:50]))
+          PY
