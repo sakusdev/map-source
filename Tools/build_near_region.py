@@ -5,7 +5,6 @@ import argparse
 import time
 from pathlib import Path
 
-import build_dataset as base
 import build_dem_region as regional
 import build_near_detail as near
 
@@ -20,6 +19,15 @@ def complete(root: Path, x: int, y: int, subdivision: int) -> bool:
         if not p.is_file() or p.stat().st_size == 0:
             return False
     return True
+
+
+def cleanup_incomplete(root: Path, x: int, y: int, subdivision: int) -> None:
+    if complete(root, x, y, subdivision):
+        return
+    stem = f"{x:02d}_{y:02d}"
+    (root / f"{stem}.json").unlink(missing_ok=True)
+    for i in range(subdivision * subdivision):
+        (root / f"{stem}_c{i:02d}.jpg").unlink(missing_ok=True)
 
 
 def center_out_tiles(grid_x: int, grid_y: int) -> list[tuple[int, int]]:
@@ -62,6 +70,7 @@ def main() -> None:
         ok = False
         for attempt in range(1, max(1, args.tile_attempts) + 1):
             try:
+                cleanup_incomplete(root, x, y, args.subdivision)
                 print(f"NEAR_REGION_BUILD tile={stem} attempt={attempt}")
                 near.build_near(args.region, x, y, False, args.source_zoom, args.subdivision)
                 if not complete(root, x, y, args.subdivision):
@@ -69,6 +78,7 @@ def main() -> None:
                 ok = True
                 break
             except Exception as exc:
+                cleanup_incomplete(root, x, y, args.subdivision)
                 print(f"NEAR_REGION_TILE_ERROR tile={stem} attempt={attempt} error={exc!r}")
                 if attempt < max(1, args.tile_attempts):
                     time.sleep(min(30.0, 5.0 * attempt))
