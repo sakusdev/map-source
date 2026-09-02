@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       run_minutes:
-        description: 'Generation budget in minutes'
+        description: 'Generation budget in minutes per shard'
         required: true
         default: '285'
       batch_tiles:
-        description: 'Completed 4km tiles per commit batch'
+        description: 'Completed 4km tiles per checkpoint'
         required: true
         default: '4'
   push:
@@ -23,15 +23,23 @@ concurrency:
   group: map-source-kanto-near
   cancel-in-progress: false
 
+env:
+  GSI_REQUEST_DELAY: '0.08'
+  GSI_HTTP_TIMEOUT: '25'
+  GSI_HTTP_ATTEMPTS: '6'
+  ROOT_NEAR: Server/data/regions/kanto/near-z18-s4
+  SHARD_COUNT: '6'
+
 jobs:
   generate:
+    name: generate-shard-${{ matrix.shard }}
     runs-on: ubuntu-latest
     timeout-minutes: 315
-    env:
-      GSI_REQUEST_DELAY: '0.05'
-      GSI_HTTP_TIMEOUT: '25'
-      GSI_HTTP_ATTEMPTS: '6'
-      ROOT_NEAR: Server/data/regions/kanto/near-z18-s4
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -46,12 +54,18 @@ jobs:
       - name: Install dependencies
         run: pip install -r Tools/requirements.txt
 
-      - name: Configure git
+      - name: Configure isolated shard branch
+        shell: bash
         run: |
+          set -Eeuo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          branch="kanto-near-${GITHUB_RUN_ID}-s${{ matrix.shard }}"
+          git checkout -B "$branch" origin/main
+          echo "SHARD_BRANCH=$branch" >> "$GITHUB_ENV"
+          echo "KANTO_NEAR_SHARD_READY shard=${{ matrix.shard }}/${SHARD_COUNT} branch=$branch"
 
-      - name: Generate, checkpoint, and continue
+      - name: Generate shard and checkpoint
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -72,22 +86,23 @@ jobs:
           mkdir -p "$ROOT_NEAR"
 
           while (( $(date +%s) < deadline )); do
-            echo "=== Kanto near batch $((batches + 1)) ==="
-            before=$(git status --porcelain -- "$ROOT_NEAR" | wc -l)
+            echo "=== Kanto near shard ${{ matrix.shard }} batch $((batches + 1)) ==="
             if ! python Tools/build_near_region.py \
               --region kanto \
               --source-zoom 18 \
               --subdivision 4 \
+              --shard-count "$SHARD_COUNT" \
+              --shard-index '${{ matrix.shard }}' \
               --max-tiles "$batch_tiles" \
               --max-seconds 1500 \
               --tile-attempts 2; then
               fail_streak=$((fail_streak + 1))
-              echo "near batch failed streak=$fail_streak"
+              echo "near shard batch failed streak=$fail_streak"
               git clean -fd -- "$ROOT_NEAR" || true
               git checkout -- "$ROOT_NEAR" 2>/dev/null || true
               if (( fail_streak >= 4 )); then
-                echo 'four consecutive batches failed; aborting'
-                exit 1
+                echo "::warning::Shard ${{ matrix.shard }} stopped after four consecutive failed batches"
+                break
               fi
               sleep 30
               continue
@@ -96,43 +111,109 @@ jobs:
 
             git add "$ROOT_NEAR"
             if git diff --cached --quiet; then
-              echo 'no new complete near-detail tiles; region may be complete'
+              echo 'no new complete near-detail tiles for this shard'
               break
             fi
 
             tiles=$(git diff --cached --name-only -- "$ROOT_NEAR" | grep -E '\.json$' | wc -l)
             files=$(git diff --cached --name-only -- "$ROOT_NEAR" | wc -l)
-            bytes=$(git diff --cached --numstat -- "$ROOT_NEAR" | awk '{add+=$1; del+=$2} END {print add+del+0}')
-            echo "checkpoint tiles=$tiles files=$files textLines=$bytes"
-            git commit -m "data: expand kanto Z18 near-detail (+${tiles} tiles)"
+            echo "checkpoint shard=${{ matrix.shard }} tiles=$tiles files=$files"
+            git commit -m "data: expand kanto Z18 near shard ${{ matrix.shard }} (+${tiles} tiles)"
 
             pushed=0
             for attempt in 1 2 3 4 5; do
-              if git pull --rebase origin main && git push origin HEAD:main; then
+              if git push -u origin "HEAD:$SHARD_BRANCH"; then
                 pushed=1
                 break
               fi
               echo "push retry $attempt/5"
-              git rebase --abort 2>/dev/null || true
               sleep $((attempt * 5))
             done
             if (( pushed == 0 )); then
-              echo 'could not checkpoint generated imagery'
+              echo 'could not checkpoint generated shard imagery'
               exit 1
             fi
 
             batches=$((batches + 1))
             total_committed=$((total_committed + tiles))
-            echo "KANTO_NEAR_CHECKPOINT batches=$batches totalTiles=$total_committed"
+            echo "KANTO_NEAR_SHARD_CHECKPOINT shard=${{ matrix.shard }} batches=$batches totalTiles=$total_committed"
             sleep 2
           done
 
-          echo "KANTO_NEAR_RUN_DONE batches=$batches committedTiles=$total_committed"
+          echo "KANTO_NEAR_SHARD_DONE shard=${{ matrix.shard }} batches=$batches committedTiles=$total_committed"
 
-      - name: Summarize coverage
-        if: always()
+  merge:
+    name: merge-shards-to-main
+    needs: generate
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Merge completed shard branches
         shell: bash
         run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin main
+          git reset --hard origin/main
+
+          merged=0
+          for shard in 0 1 2 3 4 5; do
+            branch="kanto-near-${GITHUB_RUN_ID}-s${shard}"
+            if ! git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+              echo "KANTO_NEAR_SHARD_MISSING shard=$shard branch=$branch"
+              continue
+            fi
+            git fetch origin "$branch:refs/remotes/origin/$branch"
+            if git diff --quiet HEAD "origin/$branch" -- "$ROOT_NEAR"; then
+              echo "KANTO_NEAR_SHARD_EMPTY shard=$shard"
+              continue
+            fi
+            git merge --squash "origin/$branch"
+            files=$(git diff --cached --name-only -- "$ROOT_NEAR" | wc -l)
+            tiles=$(git diff --cached --name-only -- "$ROOT_NEAR" | grep -E '\.json$' | wc -l)
+            git commit -m "data: merge kanto Z18 shard ${shard} (+${tiles} tiles)"
+            merged=$((merged + tiles))
+            echo "KANTO_NEAR_SHARD_MERGED shard=$shard tiles=$tiles files=$files mergedTotal=$merged"
+          done
+
+          if (( merged == 0 )); then
+            echo 'KANTO_NEAR_MERGE_NO_CHANGES'
+          else
+            pushed=0
+            for attempt in 1 2 3 4 5; do
+              git fetch origin main
+              if ! git merge --no-edit origin/main; then
+                echo 'main changed with conflicts while merging shards'
+                exit 1
+              fi
+              if git push origin HEAD:main; then
+                pushed=1
+                break
+              fi
+              echo "main push retry $attempt/5"
+              sleep $((attempt * 5))
+            done
+            (( pushed == 1 )) || { echo 'could not publish merged shards'; exit 1; }
+          fi
+
+          for shard in 0 1 2 3 4 5; do
+            branch="kanto-near-${GITHUB_RUN_ID}-s${shard}"
+            git push origin --delete "$branch" 2>/dev/null || true
+          done
+          echo "KANTO_NEAR_MERGE_DONE mergedTiles=$merged"
+
+      - name: Summarize coverage
+        shell: bash
+        run: |
+          git fetch origin main
+          git reset --hard origin/main
           python - <<'PY'
           from pathlib import Path
           root = Path('Server/data/regions/kanto/near-z18-s4')
