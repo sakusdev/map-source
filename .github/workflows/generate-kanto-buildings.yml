@@ -1,0 +1,178 @@
+name: Generate full Kanto Overture buildings
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/kanto-buildings-request'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: map-source-kanto-buildings
+  cancel-in-progress: false
+
+env:
+  SHARD_COUNT: '6'
+  ROOT_BUILDINGS: Server/data/regions/kanto/buildings
+
+jobs:
+  generate:
+    name: building-shard-${{ matrix.shard }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: Tools/requirements-buildings.txt
+
+      - name: Install Overture client
+        run: pip install -r Tools/requirements-buildings.txt
+
+      - name: Configure isolated shard branch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          branch="kanto-buildings-${GITHUB_RUN_ID}-s${{ matrix.shard }}"
+          git checkout -b "$branch"
+          echo "SHARD_BRANCH=$branch" >> "$GITHUB_ENV"
+          echo "GSB1_SHARD_READY shard=${{ matrix.shard }}/${SHARD_COUNT} branch=$branch"
+
+      - name: Generate and checkpoint shard
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          batches=0
+          total=0
+          for batch in $(seq 1 20); do
+            echo "=== building shard ${{ matrix.shard }} batch $batch ==="
+            python Tools/build_kanto_buildings_region.py \
+              --shard-count "$SHARD_COUNT" \
+              --shard-index '${{ matrix.shard }}' \
+              --chunk-width 4 \
+              --chunk-height 4 \
+              --max-chunks 2 \
+              --attempts 3
+
+            git add "$ROOT_BUILDINGS"
+            if git diff --cached --quiet; then
+              echo "GSB1_SHARD_NO_MORE shard=${{ matrix.shard }}"
+              break
+            fi
+            tiles=$(git diff --cached --name-only -- "$ROOT_BUILDINGS" | sed -E 's#^.*/([0-9]{2}_[0-9]{2})\.gsb1$#\1#' | sort -u | wc -l)
+            git commit -m "data: expand Kanto buildings shard ${{ matrix.shard }} (+${tiles} tiles)"
+            pushed=0
+            for attempt in 1 2 3 4 5; do
+              if git push -u origin "HEAD:$SHARD_BRANCH"; then pushed=1; break; fi
+              sleep $((attempt * 4))
+            done
+            (( pushed == 1 )) || { echo 'building shard push failed'; exit 1; }
+            batches=$((batches + 1))
+            total=$((total + tiles))
+            echo "GSB1_SHARD_CHECKPOINT shard=${{ matrix.shard }} batches=$batches totalTiles=$total"
+          done
+          echo "GSB1_SHARD_DONE shard=${{ matrix.shard }} batches=$batches committedTiles=$total"
+
+  merge:
+    name: merge-building-shards
+    needs: generate
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Merge available shard branches
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          merged=0
+          for shard in 0 1 2 3 4 5; do
+            branch="kanto-buildings-${GITHUB_RUN_ID}-s${shard}"
+            if ! git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+              echo "GSB1_SHARD_MISSING shard=$shard"
+              continue
+            fi
+            git fetch origin "$branch:refs/remotes/origin/$branch"
+            base=$(git merge-base HEAD "origin/$branch")
+            echo "GSB1_SHARD_MERGE_BASE shard=$shard base=$base"
+            if git diff --quiet HEAD "origin/$branch" -- "$ROOT_BUILDINGS"; then
+              echo "GSB1_SHARD_EMPTY shard=$shard"
+              continue
+            fi
+            git merge --squash "origin/$branch"
+            tiles=$(git diff --cached --name-only -- "$ROOT_BUILDINGS" | sed -E 's#^.*/([0-9]{2}_[0-9]{2})\.gsb1$#\1#' | sort -u | wc -l)
+            git commit -m "data: merge Kanto buildings shard ${shard} (+${tiles} tiles)"
+            merged=$((merged + tiles))
+            echo "GSB1_SHARD_MERGED shard=$shard tiles=$tiles mergedTotal=$merged"
+          done
+
+          if (( merged > 0 )); then
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
+
+          for shard in 0 1 2 3 4 5; do
+            git push origin --delete "kanto-buildings-${GITHUB_RUN_ID}-s${shard}" 2>/dev/null || true
+          done
+          echo "GSB1_MERGE_DONE mergedTiles=$merged"
+
+      - name: Summarize coverage
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git fetch origin main
+          git reset --hard origin/main
+          python - <<'PY'
+          from pathlib import Path
+          import struct
+          roots = [Path('Server/data/regions/kanto/buildings/pc'), Path('Server/data/regions/kanto/buildings/quest')]
+          complete = 0
+          invalid = []
+          total_pc = 0
+          total_quest = 0
+          for y in range(63):
+              for x in range(60):
+                  stem = f'{x:02d}_{y:02d}.gsb1'
+                  ok = True
+                  counts = []
+                  for root in roots:
+                      p = root / stem
+                      if not p.is_file():
+                          ok = False; break
+                      b = p.read_bytes()
+                      if len(b) < 12 or b[:4] != b'GSB1' or b[4] != 1:
+                          ok = False; break
+                      count = struct.unpack_from('<H', b, 6)[0]
+                      if len(b) != 12 + count * 12:
+                          ok = False; break
+                      counts.append(count)
+                  if ok:
+                      complete += 1
+                      total_pc += counts[0]
+                      total_quest += counts[1]
+                  else:
+                      invalid.append(stem)
+          print(f'GSB1_KANTO_COVERAGE complete={complete}/3780 remaining={3780-complete} invalid={len(invalid)} pcBuildings={total_pc} questBuildings={total_quest}')
+          if invalid: print('missing_or_invalid:', ' '.join(invalid[:50]))
+          PY
