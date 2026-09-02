@@ -1,0 +1,38 @@
+{
+  "format": "GST2_REGION",
+  "version": 1,
+  "region": "kanto-lod3",
+  "center": {
+    "lat": 36.075,
+    "lon": 139.675
+  },
+  "coverage": {
+    "west": 133.98444393596907,
+    "south": 31.343779254664398,
+    "east": 145.36555606403095,
+    "north": 40.537878601338406
+  },
+  "grid": {
+    "x": 1,
+    "y": 1
+  },
+  "tileSizeMeters": 1024000.0,
+  "originMeters": {
+    "x": -512000.0,
+    "z": -512000.0
+  },
+  "dem": {
+    "format": "GST2",
+    "version": 2,
+    "grid": 129,
+    "sourceZoom": 8,
+    "urlPattern": "dem/{x:02d}_{y:02d}.gst2",
+    "sourcePriority": [
+      "dem1a_png",
+      "dem5a_png",
+      "dem5b_png",
+      "dem5c_png",
+      "dem_png"
+    ]
+  }
+}
