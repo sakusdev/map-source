@@ -1,0 +1,8 @@
+requested: 2026-09-02T22:24:00+09:00
+mode: kanto-mesh-lod3
+coverage: 1024kmx1024km
+radius_base_chunks: 128
+mesh_grid: 129x129
+vertex_spacing_m: 8000
+source_zoom: 8
+collider: false
