@@ -1,0 +1,128 @@
+name: Generate Kanto GIS vegetation
+
+on:
+  workflow_dispatch:
+    inputs:
+      tile_x:
+        description: 'Kanto tile X'
+        required: true
+        default: '29'
+      tile_y:
+        description: 'Kanto tile Y'
+        required: true
+        default: '31'
+      overwrite:
+        description: 'Regenerate existing output'
+        required: true
+        default: true
+        type: boolean
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/vegetation-request-seed'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: map-source-kanto-vegetation
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            Tools/requirements.txt
+            Tools/requirements-buildings.txt
+
+      - name: Install generator dependencies
+        run: |
+          pip install -r Tools/requirements.txt
+          pip install -r Tools/requirements-buildings.txt
+
+      - name: Configure git
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Resolve request
+        id: request
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ '${{ github.event_name }}' == 'workflow_dispatch' ]]; then
+            x='${{ inputs.tile_x }}'
+            y='${{ inputs.tile_y }}'
+            overwrite='${{ inputs.overwrite }}'
+          else
+            x=$(awk -F: '/^tile_x:/ {gsub(/[[:space:]]/,"",$2); print $2}' .github/vegetation-request-seed)
+            y=$(awk -F: '/^tile_y:/ {gsub(/[[:space:]]/,"",$2); print $2}' .github/vegetation-request-seed)
+            overwrite=true
+          fi
+          [[ "$x" =~ ^[0-9]+$ ]] || { echo "invalid tile_x=$x"; exit 2; }
+          [[ "$y" =~ ^[0-9]+$ ]] || { echo "invalid tile_y=$y"; exit 2; }
+          echo "x=$x" >> "$GITHUB_OUTPUT"
+          echo "y=$y" >> "$GITHUB_OUTPUT"
+          echo "overwrite=$overwrite" >> "$GITHUB_OUTPUT"
+
+      - name: Generate Overture forest vegetation tile
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          extra=()
+          if [[ '${{ steps.request.outputs.overwrite }}' == 'true' ]]; then
+            extra+=(--overwrite)
+          fi
+          python Tools/build_vegetation.py \
+            --region kanto \
+            --tile '${{ steps.request.outputs.x }}' '${{ steps.request.outputs.y }}' \
+            "${extra[@]}"
+
+      - name: Verify GSV1
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          X='${{ steps.request.outputs.x }}' Y='${{ steps.request.outputs.y }}' python - <<'PY'
+          import os, pathlib, struct
+          x = int(os.environ['X']); y = int(os.environ['Y'])
+          stem = f'{x:02d}_{y:02d}'
+          for platform in ('pc', 'quest'):
+              p = pathlib.Path('Server/data/regions/kanto/vegetation') / platform / f'{stem}.gsv1'
+              b = p.read_bytes()
+              if len(b) < 12 or b[:4] != b'GSV1' or b[4] != 1:
+                  raise SystemExit(f'invalid GSV1 header: {p}')
+              count = struct.unpack_from('<H', b, 6)[0]
+              expected = 12 + count * 10
+              if len(b) != expected:
+                  raise SystemExit(f'invalid GSV1 size: {p}: count={count} bytes={len(b)} expected={expected}')
+              print(f'GSV1_VERIFY platform={platform} tile={stem} count={count} bytes={len(b)}')
+          PY
+
+      - name: Commit generated vegetation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git add Server/data/regions/kanto/vegetation DATA_ATTRIBUTION.md
+          if git diff --cached --quiet; then
+            echo 'vegetation data unchanged'
+            exit 0
+          fi
+          git commit -m "data: generate Kanto GIS vegetation tile ${{ steps.request.outputs.x }}_${{ steps.request.outputs.y }}"
+          for attempt in 1 2 3 4 5; do
+            if git pull --rebase origin main && git push origin HEAD:main; then
+              exit 0
+            fi
+            git rebase --abort 2>/dev/null || true
+            sleep $((attempt * 5))
+          done
+          exit 1
