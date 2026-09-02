@@ -95,7 +95,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0
           ref: main
 
       - name: Merge available shard branches
@@ -111,7 +111,9 @@ jobs:
               echo "GSW1_SHARD_MISSING shard=$shard"
               continue
             fi
-            git fetch --depth=1 origin "$branch:refs/remotes/origin/$branch"
+            git fetch origin "$branch:refs/remotes/origin/$branch"
+            base=$(git merge-base HEAD "origin/$branch")
+            echo "GSW1_SHARD_MERGE_BASE shard=$shard base=$base"
             if git diff --quiet HEAD "origin/$branch" -- "$ROOT_WATER"; then
               echo "GSW1_SHARD_EMPTY shard=$shard"
               continue
@@ -124,8 +126,7 @@ jobs:
           done
 
           if (( merged > 0 )); then
-            git fetch origin main
-            git merge --no-edit origin/main
+            git pull --rebase origin main
             git push origin HEAD:main
           fi
 
