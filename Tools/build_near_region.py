@@ -46,14 +46,29 @@ def main() -> None:
     ap.add_argument("--max-tiles", type=int, default=1, help="0 means unlimited successful tiles")
     ap.add_argument("--max-seconds", type=float, default=0.0, help="0 means no time limit")
     ap.add_argument("--tile-attempts", type=int, default=2)
+    ap.add_argument("--shard-count", type=int, default=1)
+    ap.add_argument("--shard-index", type=int, default=0)
     args = ap.parse_args()
+
+    if args.shard_count < 1:
+        raise SystemExit("--shard-count must be >= 1")
+    if args.shard_index < 0 or args.shard_index >= args.shard_count:
+        raise SystemExit(f"--shard-index must be in 0..{args.shard_count - 1}")
 
     cfg = regional.apply_region(args.region)
     root = near.output_root(args.region, args.source_zoom, args.subdivision)
     root.mkdir(parents=True, exist_ok=True)
     ordered = center_out_tiles(int(cfg["grid_x"]), int(cfg["grid_y"]))
-    missing = [(x, y) for x, y in ordered if not complete(root, x, y, args.subdivision)]
-    print(f"NEAR_REGION_BEGIN region={args.region} grid={cfg['grid_x']}x{cfg['grid_y']} missing={len(missing)} sourceZ={args.source_zoom} subdivision={args.subdivision}")
+
+    # Partition BEFORE filtering completed outputs. This keeps tile ownership
+    # stable across concurrent branches and future resume runs.
+    owned = [tile for ordinal, tile in enumerate(ordered) if ordinal % args.shard_count == args.shard_index]
+    missing = [(x, y) for x, y in owned if not complete(root, x, y, args.subdivision)]
+    print(
+        f"NEAR_REGION_BEGIN region={args.region} grid={cfg['grid_x']}x{cfg['grid_y']} "
+        f"shard={args.shard_index}/{args.shard_count} owned={len(owned)} missing={len(missing)} "
+        f"sourceZ={args.source_zoom} subdivision={args.subdivision}"
+    )
 
     started = time.monotonic()
     built = 0
@@ -71,7 +86,7 @@ def main() -> None:
         for attempt in range(1, max(1, args.tile_attempts) + 1):
             try:
                 cleanup_incomplete(root, x, y, args.subdivision)
-                print(f"NEAR_REGION_BUILD tile={stem} attempt={attempt}")
+                print(f"NEAR_REGION_BUILD tile={stem} shard={args.shard_index}/{args.shard_count} attempt={attempt}")
                 near.build_near(args.region, x, y, False, args.source_zoom, args.subdivision)
                 if not complete(root, x, y, args.subdivision):
                     raise RuntimeError("tile output incomplete")
@@ -85,12 +100,15 @@ def main() -> None:
 
         if ok:
             built += 1
-            print(f"NEAR_REGION_TILE_READY tile={stem} built={built}")
+            print(f"NEAR_REGION_TILE_READY tile={stem} shard={args.shard_index}/{args.shard_count} built={built}")
         else:
             failures.append(stem)
 
-    remaining = sum(1 for x, y in ordered if not complete(root, x, y, args.subdivision))
-    print(f"NEAR_REGION_DONE built={built} remaining={remaining} failures={len(failures)}")
+    remaining = sum(1 for x, y in owned if not complete(root, x, y, args.subdivision))
+    print(
+        f"NEAR_REGION_DONE shard={args.shard_index}/{args.shard_count} "
+        f"built={built} remainingOwned={remaining} failures={len(failures)}"
+    )
     if failures:
         print("NEAR_REGION_FAILURES " + " ".join(failures[:50]))
     if built == 0 and remaining > 0:
