@@ -1,0 +1,10 @@
+requested: 2026-09-02T17:10:00+09:00
+region: kanto
+tile_x: 29
+tile_y: 31
+source: overture-base-land_cover-forest
+format: GSV1
+pc_max_per_tile: 1000
+quest_max_per_tile: 240
+asset_pack: Quaternius Textured LowPoly Trees
+asset_license: CC0-1.0
