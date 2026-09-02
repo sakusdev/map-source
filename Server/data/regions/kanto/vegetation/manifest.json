@@ -1,0 +1,55 @@
+{
+  "format": "GSV1_REGION",
+  "version": 1,
+  "region": "kanto",
+  "tileSizeMeters": 4000.0,
+  "grid": {
+    "x": 60,
+    "y": 63
+  },
+  "source": {
+    "provider": "Overture Maps Foundation",
+    "theme": "base",
+    "type": "land_cover",
+    "filter": {
+      "subtype": "forest"
+    },
+    "upstream": "ESA WorldCover"
+  },
+  "placement": {
+    "deterministic": true,
+    "speciesClassification": false,
+    "pcMaxPerTile": 1000,
+    "questMaxPerTile": 240,
+    "pcDensityPerKm2": 180.0
+  },
+  "assets": {
+    "license": "CC0-1.0",
+    "author": "Quaternius",
+    "pack": "Textured LowPoly Trees",
+    "variants": [
+      "Pine_4",
+      "Pine_2",
+      "Pine_5",
+      "Tree_1",
+      "Tree_7",
+      "Tree_10",
+      "Birch_2",
+      "Birch_9"
+    ]
+  },
+  "record": {
+    "bytes": 10,
+    "fields": [
+      "x_dm:u16",
+      "z_dm:u16",
+      "y_delta_dm:u16",
+      "variant:u8",
+      "scale_q:u8",
+      "yaw_q:u8",
+      "flags:u8"
+    ],
+    "scaleDecode": "0.5 + scale_q/255*1.5",
+    "yawDecodeDegrees": "yaw_q/255*360"
+  }
+}
