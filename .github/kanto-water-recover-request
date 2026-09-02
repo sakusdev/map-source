@@ -1,0 +1,5 @@
+requested: 2026-09-02T18:39:00+09:00
+source_run_id: 33610188829
+mode: recover-existing-water-shards
+expected_shards: 6
+expected_tiles: 3780
