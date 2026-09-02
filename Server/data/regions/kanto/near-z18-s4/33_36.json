@@ -1,0 +1,17 @@
+{
+  "format": "GST2_NEAR",
+  "version": 2,
+  "region": "kanto",
+  "tile": {
+    "x": 33,
+    "y": 36
+  },
+  "sourceZoom": 18,
+  "sourceTileCount": 1089,
+  "subdivision": 4,
+  "cellSizeMeters": 1000.0,
+  "imageSize": 2048,
+  "jpegQuality": 90,
+  "cellIndex": "south-row-major: index=y*subdivision+x",
+  "urlPattern": "33_36_c{index:02d}.jpg"
+}
