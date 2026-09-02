@@ -1,0 +1,8 @@
+requested: 2026-09-02T20:58:00+09:00
+region: kanto
+mode: full-sharded
+grid: 60x63
+chunk: 4x4
+shards: 6
+pc_max_per_tile: 1200
+quest_max_per_tile: 300
