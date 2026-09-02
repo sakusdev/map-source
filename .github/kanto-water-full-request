@@ -1,0 +1,10 @@
+requested: 2026-09-02T17:47:00+09:00
+region: kanto
+grid: 60x63
+format: GSW1
+shards: 6
+checkpoint_tiles: 50
+pc_simplify_m: 1.5
+quest_simplify_m: 7.0
+source: Overture base/water
+empty_tiles: emit-valid-empty-GSW1
