@@ -1,12 +1,14 @@
-requested: 2026-09-02T08:55:00+09:00
+requested: 2026-09-02T16:18:00+09:00
 region: kanto
 source_zoom: 18
 subdivision: 4
 image_size: 2048
 order: center-out
-run_minutes: 285
+shards: 6
+run_minutes_per_shard: 285
 batch_tiles: 4
-resume: skip-complete
-checkpoint: commit-and-push-each-batch
+resume: deterministic-shard-skip-complete
+checkpoint: isolated-branch-per-shard
+merge: squash-shards-to-main
 pages: deploy-once-after-run
-reason: autonomously expand Kanto near-detail terrain imagery while user is away
+reason: parallelize Kanto near-detail generation across six non-overlapping shards
