@@ -1,0 +1,129 @@
+name: Recover Kanto GIS water shards
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: 'Full-water workflow run ID whose shard branches should be recovered'
+        required: true
+        default: '33610188829'
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/kanto-water-recover-request'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: map-source-kanto-water-recovery
+  cancel-in-progress: false
+
+env:
+  ROOT_WATER: Server/data/regions/kanto/water
+  DEFAULT_SOURCE_RUN_ID: '33610188829'
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Recover generated shard branches into main
+        shell: bash
+        env:
+          INPUT_SOURCE_RUN_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.source_run_id || '' }}
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          source_run_id="${INPUT_SOURCE_RUN_ID:-$DEFAULT_SOURCE_RUN_ID}"
+          merged=0
+          merged_shards=0
+
+          for shard in 0 1 2 3 4 5; do
+            branch="kanto-water-${source_run_id}-s${shard}"
+            if ! git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+              echo "GSW1_RECOVERY_SHARD_MISSING shard=$shard branch=$branch"
+              continue
+            fi
+
+            git fetch origin "$branch:refs/remotes/origin/$branch"
+            base=$(git merge-base HEAD "origin/$branch")
+            echo "GSW1_RECOVERY_MERGE_BASE shard=$shard base=$base"
+
+            if git diff --quiet HEAD "origin/$branch" -- "$ROOT_WATER"; then
+              echo "GSW1_RECOVERY_SHARD_EMPTY shard=$shard"
+              continue
+            fi
+
+            git merge --squash "origin/$branch"
+            tiles=$(git diff --cached --name-only -- "$ROOT_WATER" | sed -E 's#^.*/([0-9]{2}_[0-9]{2})\.gsw1$#\1#' | sort -u | wc -l)
+            if (( tiles == 0 )); then
+              git reset --merge HEAD
+              echo "GSW1_RECOVERY_SHARD_EMPTY shard=$shard"
+              continue
+            fi
+            git commit -m "data: recover Kanto water shard ${shard} (+${tiles} tiles)"
+            merged=$((merged + tiles))
+            merged_shards=$((merged_shards + 1))
+            echo "GSW1_RECOVERY_SHARD_MERGED shard=$shard tiles=$tiles mergedTotal=$merged"
+          done
+
+          if (( merged > 0 )); then
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
+
+          for shard in 0 1 2 3 4 5; do
+            git push origin --delete "kanto-water-${source_run_id}-s${shard}" 2>/dev/null || true
+          done
+
+          echo "GSW1_RECOVERY_MERGE_DONE sourceRun=$source_run_id shards=$merged_shards mergedTiles=$merged"
+
+      - name: Verify complete GSW1 coverage
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git fetch origin main
+          git reset --hard origin/main
+          python - <<'PY'
+          from pathlib import Path
+          import struct
+
+          roots = [Path('Server/data/regions/kanto/water/pc'), Path('Server/data/regions/kanto/water/quest')]
+          complete = 0
+          invalid = []
+          for y in range(63):
+              for x in range(60):
+                  stem = f'{x:02d}_{y:02d}.gsw1'
+                  ok = True
+                  for root in roots:
+                      p = root / stem
+                      if not p.is_file():
+                          ok = False
+                          break
+                      b = p.read_bytes()
+                      if len(b) < 16 or b[:4] != b'GSW1' or b[4] != 1:
+                          ok = False
+                          break
+                      vc = struct.unpack_from('<H', b, 6)[0]
+                      ic = struct.unpack_from('<I', b, 8)[0]
+                      if len(b) != 16 + vc * 6 + ic * 2 or ic % 3:
+                          ok = False
+                          break
+                  if ok:
+                      complete += 1
+                  else:
+                      invalid.append(stem)
+
+          print(f'GSW1_COVERAGE complete={complete}/3780 remaining={3780-complete} invalid={len(invalid)}')
+          if invalid:
+              print('missing_or_invalid:', ' '.join(invalid[:100]))
+              raise SystemExit(1)
+          print('GSW1_FULL_COVERAGE_SUCCESS')
+          PY
