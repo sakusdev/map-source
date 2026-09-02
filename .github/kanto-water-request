@@ -1,0 +1,7 @@
+requested: 2026-09-02T17:39:00+09:00
+region: kanto
+seed_tile: 46,30
+source: overture-water
+format: GSW1
+pc_simplify_m: 1.5
+quest_simplify_m: 7.0
