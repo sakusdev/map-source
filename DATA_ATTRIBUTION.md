@@ -43,3 +43,13 @@ Overture Base / land-cover documentation: https://docs.overturemaps.org/guides/b
 Overture attribution and licensing reference: https://docs.overturemaps.org/attribution/
 
 Tree meshes used for rendering are from Quaternius, `Textured LowPoly Trees`, dedicated under CC0 1.0 Universal. The geometry assets are independent of the Overture-derived placement database.
+
+## Water
+
+Water surfaces used to generate `Server/data/regions/*/water/**/*.gsw1` are derived from the Overture Maps Foundation Base theme, `water` feature type. Overture water features represent ocean and inland water bodies and are sourced from OpenStreetMap. The generator uses polygon and multi-polygon water geometry directly and converts river/stream/canal line geometry into narrow game-oriented water strips before clipping and triangulating each 4 km runtime tile.
+
+The generated GSW1 files are simplified, triangulated rendering derivatives rather than authoritative hydrographic or navigation data. Inland surface elevation is approximated from the project DEM and ocean surfaces use sea level with a small rendering offset.
+
+Source credit: Overture Maps Foundation / © OpenStreetMap contributors — Open Database License (ODbL) 1.0.
+Overture Water schema: https://docs.overturemaps.org/schema/reference/base/water/
+Overture attribution and licensing reference: https://docs.overturemaps.org/attribution/
