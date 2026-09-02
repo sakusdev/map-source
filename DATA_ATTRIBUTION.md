@@ -32,3 +32,14 @@ Overture attribution and licensing reference: https://docs.overturemaps.org/attr
 Overture Buildings documentation: https://docs.overturemaps.org/guides/buildings/
 
 For an in-world or application attribution surface, a concise credit such as `Buildings: Overture Maps Foundation / © OpenStreetMap contributors — ODbL 1.0` should link or otherwise provide access to the full attribution above.
+
+## Vegetation / forest placement
+
+Forest footprints used to generate `Server/data/regions/*/vegetation/**/*.gsv1` are derived from the Overture Maps Foundation Base theme, `land_cover` feature type, filtered to `subtype=forest`. Overture land-cover features are sourced from ESA WorldCover. The Overture Base theme is distributed under ODbL 1.0; retain the Overture attribution appropriate to the release used by the generator.
+
+The generated GSV1 files contain deterministic game-oriented placement samples inside those GIS forest footprints. They do not claim individual-tree positions or tree-species accuracy.
+
+Overture Base / land-cover documentation: https://docs.overturemaps.org/guides/base/
+Overture attribution and licensing reference: https://docs.overturemaps.org/attribution/
+
+Tree meshes used for rendering are from Quaternius, `Textured LowPoly Trees`, dedicated under CC0 1.0 Universal. The geometry assets are independent of the Overture-derived placement database.
